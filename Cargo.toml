@@ -1,0 +1,39 @@
+[package]
+name = "openfluchtplan"
+version = "0.1.0"
+edition = "2024"
+description = "Flucht- und Rettungspläne (DIN ISO 23601), Feuerwehrpläne (DIN 14095) und Laufkarten erstellen"
+license = "Unlicense"
+repository = "https://github.com/Schrabbe10/OpenFluchtplan"
+
+[[bin]]
+name = "OpenFluchtplan"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 4
+
+[dependencies]
+base64 = "0.23.1"
+dxf = "0.6.2"
+earcutr = "0.5.0"
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
+hayro = "0.9.0"
+i_overlay = "9.1.0"
+image = "0.25.10"
+open = "5.4.5"
+pdf-writer = "=0.12.1"
+qrcode = "0.14.1"
+resvg = "=0.45.1"
+rfd = "0.17.2"
+roxmltree = "0.21.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+svg2pdf = "0.13.0"
+ureq = { version = "3.5.1", default-features = false, features = ["native-tls", "gzip"] }
+zip = "9.3.0"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
