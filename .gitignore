@@ -1,0 +1,8 @@
+/target
+# lokale Build-Einstellungen (z. B. Netzwerk-/Proxy-Anpassungen)
+/.cargo
+*.fplan
+*.pdf
+!docs/**/*.pdf
+.vscode/
+.idea/
