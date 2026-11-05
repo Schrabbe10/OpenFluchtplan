@@ -156,7 +156,16 @@ pub fn usvg_options() -> &'static svg2pdf::usvg::Options<'static> {
     OPT.get_or_init(|| {
         let mut o = svg2pdf::usvg::Options::default();
         o.fontdb_mut().load_system_fonts();
-        o.font_family = "Arial".into();
+        // im Browser gibt es keine Systemschriften: mitgelieferte, zu Arial maßgleiche Schrift
+        for f in crate::plattform::SCHRIFTEN {
+            o.fontdb_mut().load_font_data(f.to_vec());
+        }
+        if o.fontdb.faces().any(|f| f.families.iter().any(|(n, _)| n == "Arial")) {
+            o.font_family = "Arial".into();
+        } else {
+            o.font_family = "Liberation Sans".into();
+            o.fontdb_mut().set_sans_serif_family("Liberation Sans");
+        }
         o
     })
 }
@@ -166,7 +175,12 @@ fn tree(doc: &Doc, stamp: Stamp) -> Result<svg2pdf::usvg::Tree, String> {
 }
 
 /// Ein oder mehrere Pläne als PDF (eine Seite je Plan, jeweils in eigener Blattgröße).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn export_pdf(docs: &[&Doc], stamp: Stamp, path: &Path) -> Result<(), String> {
+    std::fs::write(path, pdf_bytes(docs, stamp)?).map_err(|e| format!("Speichern fehlgeschlagen: {e}"))
+}
+
+pub fn pdf_bytes(docs: &[&Doc], stamp: Stamp) -> Result<Vec<u8>, String> {
     use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
     let mut alloc = Ref::new(1);
     let catalog = alloc.bump();
@@ -203,9 +217,10 @@ pub fn export_pdf(docs: &[&Doc], stamp: Stamp, path: &Path) -> Result<(), String
     for c in &chunks {
         pdf.extend(c);
     }
-    std::fs::write(path, pdf.finish()).map_err(|e| format!("Speichern fehlgeschlagen: {e}"))
+    Ok(pdf.finish())
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn export_svg(doc: &Doc, path: &Path) -> Result<(), String> {
     std::fs::write(path, plan_svg(doc, Stamp::Keiner)).map_err(|e| e.to_string())
 }
@@ -224,6 +239,7 @@ pub fn render_png(doc: &Doc, dpi: f32) -> Result<Vec<u8>, String> {
     pm.encode_png().map_err(|e| e.to_string())
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn export_png(doc: &Doc, dpi: f32, path: &Path) -> Result<(), String> {
     std::fs::write(path, render_png(doc, dpi)?).map_err(|e| e.to_string())
 }
@@ -324,8 +340,12 @@ fn aci(c: Color) -> u8 {
         .unwrap_or(7)
 }
 
-/// DXF in realen Maßen (mm), y nach oben.
 pub fn export_dxf(doc: &Doc, path: &Path) -> Result<(), String> {
+    std::fs::write(path, dxf_bytes(doc)?).map_err(|e| e.to_string())
+}
+
+/// DXF in realen Maßen (mm), y nach oben.
+pub fn dxf_bytes(doc: &Doc) -> Result<Vec<u8>, String> {
     use dxf::entities::{Entity, EntityType, LwPolyline, Text};
     use dxf::{Drawing, LwPolylineVertex, Point};
     let (_, h) = doc.page.size();
@@ -385,7 +405,9 @@ pub fn export_dxf(doc: &Doc, path: &Path) -> Result<(), String> {
             }
         }
     }
-    d.save_file(path).map_err(|e| format!("DXF-Fehler: {e}"))
+    let mut out = Vec::new();
+    d.save(&mut out).map_err(|e| format!("DXF-Fehler: {e}"))?;
+    Ok(out)
 }
 
 #[cfg(test)]

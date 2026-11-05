@@ -13,15 +13,20 @@ pub fn image_data(bytes: &[u8], mime: &str) -> Result<ImageData, String> {
     Ok(ImageData { mime: mime.into(), b64: B64.encode(bytes), w: img.width(), h: img.height() })
 }
 
+#[allow(dead_code)]
 pub fn load_image_file(path: &Path) -> Result<ImageData, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    load_image_bytes(&path.to_string_lossy(), &bytes)
+}
+
+/// Bild aus Dateiinhalt; PNG/JPEG bleiben, andere Formate (bmp, gif, tif) werden nach PNG umgewandelt.
+pub fn load_image_bytes(name: &str, bytes: &[u8]) -> Result<ImageData, String> {
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     match ext.as_str() {
-        "png" => image_data(&bytes, "image/png"),
-        "jpg" | "jpeg" => image_data(&bytes, "image/jpeg"),
+        "png" => image_data(bytes, "image/png"),
+        "jpg" | "jpeg" => image_data(bytes, "image/jpeg"),
         _ => {
-            // andere Formate (bmp, gif, tif) nach PNG umwandeln
-            let img = image::load_from_memory(&bytes).map_err(|e| format!("Bild nicht lesbar: {e}"))?;
+            let img = image::load_from_memory(bytes).map_err(|e| format!("Bild nicht lesbar: {e}"))?;
             let mut out = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).map_err(|e| e.to_string())?;
             image_data(&out, "image/png")
@@ -30,17 +35,25 @@ pub fn load_image_file(path: &Path) -> Result<ImageData, String> {
 }
 
 /// Anzahl Seiten einer PDF-Datei.
+#[allow(dead_code)]
 pub fn pdf_page_count(path: &Path) -> Result<usize, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    pdf_page_count_bytes(std::fs::read(path).map_err(|e| e.to_string())?)
+}
+
+pub fn pdf_page_count_bytes(bytes: Vec<u8>) -> Result<usize, String> {
     let pdf = hayro::hayro_syntax::Pdf::new(bytes).map_err(|e| format!("PDF nicht lesbar: {e:?}"))?;
     Ok(pdf.pages().len())
 }
 
 /// PDF-Seite als Bild (für Grundrisse aus PDF).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn pdf_page_image(path: &Path, page: usize, dpi: f32) -> Result<ImageData, String> {
+    pdf_page_image_bytes(std::fs::read(path).map_err(|e| e.to_string())?, page, dpi)
+}
+
+pub fn pdf_page_image_bytes(bytes: Vec<u8>, page: usize, dpi: f32) -> Result<ImageData, String> {
     use hayro::hayro_interpret::InterpreterSettings;
     use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let pdf = hayro::hayro_syntax::Pdf::new(bytes).map_err(|e| format!("PDF nicht lesbar: {e:?}"))?;
     let pages = pdf.pages();
     let pg = pages.get(page).ok_or("Seite nicht vorhanden")?;
@@ -157,8 +170,8 @@ fn collect_entities<'a>(
 }
 
 /// DXF als Gruppe von Linien/Texten, eingepasst in `area` (oder im Planmaßstab, wenn `use_scale`).
-pub fn load_dxf(path: &Path, area: BBox, scale_n: f32, use_scale: bool) -> Result<Vec<Obj>, String> {
-    let drawing = dxf::Drawing::load_file(path).map_err(|e| format!("DXF nicht lesbar: {e}"))?;
+pub fn load_dxf(bytes: &[u8], area: BBox, scale_n: f32, use_scale: bool) -> Result<Vec<Obj>, String> {
+    let drawing = dxf::Drawing::load(&mut std::io::Cursor::new(bytes)).map_err(|e| format!("DXF nicht lesbar: {e}"))?;
     let mut col = Collected::default();
     let ident = |p: Pos| p;
     collect_entities(&drawing, drawing.entities(), &ident, &mut col, 0);

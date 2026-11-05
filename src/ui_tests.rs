@@ -221,7 +221,7 @@ fn alle_dialoge_rendern() {
         |a| a.dlg.wms = true,
         |a| a.dlg.check = true,
         |a| a.dlg.offset = true,
-        |a| a.dlg.pdf_pages = Some((std::path::PathBuf::from("plan.pdf"), 3, 0)),
+        |a| a.dlg.pdf_pages = Some(crate::app::PdfAuswahl { name: "plan.pdf".into(), bytes: Default::default(), seiten: 3, seite: 0 }),
         |a| a.dlg.png = true,
         |a| a.dlg.merge = true,
         |a| a.dlg.extract = true,
@@ -429,7 +429,7 @@ fn pdf_import_im_programm() {
     });
     h.run_steps(3);
     // Dialog wie nach „Plan → Importieren → Grundriss aus PDF“
-    h.state_mut().dlg.pdf_pages = Some((f.clone(), 1, 0));
+    h.state_mut().dlg.pdf_pages = Some(crate::app::PdfAuswahl { name: "plan.pdf".into(), bytes: std::sync::Arc::new(std::fs::read(&f).unwrap()), seiten: 1, seite: 0 });
     h.state_mut().dlg.pdf_opt.group = false;
     h.run_steps(3);
     h.render().unwrap().save(std::path::Path::new(&dir).join("ui_pdfdialog.png")).unwrap();

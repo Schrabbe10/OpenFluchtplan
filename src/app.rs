@@ -9,6 +9,7 @@ use crate::canvas::Textures;
 use crate::export::{self, Stamp};
 use crate::geom::*;
 use crate::model::*;
+use crate::plattform::{self, Datei, Zweck};
 use crate::{import, ops, presets, samples, templates};
 
 pub const UNDO_MAX: usize = 60;
@@ -231,20 +232,11 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn path() -> Option<PathBuf> {
-        std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("Fluchtplan").join("einstellungen.json"))
-    }
     pub fn load() -> Self {
-        Self::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        plattform::einstellungen_lesen().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
     pub fn save(&self) {
-        if let Some(p) = Self::path() {
-            let _ = std::fs::create_dir_all(p.parent().unwrap());
-            let _ = std::fs::write(p, serde_json::to_string_pretty(self).unwrap_or_default());
-        }
+        plattform::einstellungen_schreiben(&serde_json::to_string_pretty(self).unwrap_or_default());
     }
     pub fn add_recent(&mut self, p: &std::path::Path) {
         self.recent.retain(|r| r != p);
@@ -256,6 +248,15 @@ impl Settings {
 
 pub use crate::pdfvec::{PdfFit, PdfImportOpt};
 
+/// Gewählte PDF-Datei für den Import-Dialog (Inhalt statt Pfad – funktioniert auch im Browser).
+#[derive(Clone)]
+pub struct PdfAuswahl {
+    pub name: String,
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub seiten: usize,
+    pub seite: usize,
+}
+
 pub enum Drag {
     Move { last: Pos },
     Handle { id: u64, idx: usize },
@@ -265,6 +266,8 @@ pub enum Drag {
 pub struct DocTab {
     pub doc: Doc,
     pub path: Option<PathBuf>,
+    /// Dateiname ohne Pfad (Browser: zuletzt geöffnet/heruntergeladen)
+    pub name: Option<String>,
     pub dirty: bool,
     pub undo: Vec<Doc>,
     pub redo: Vec<Doc>,
@@ -284,10 +287,10 @@ pub fn file_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 impl DocTab {
     pub fn new(doc: Doc, path: Option<PathBuf>) -> Self {
         let mtime = path.as_deref().and_then(file_mtime);
-        Self { doc, path, dirty: false, undo: Vec::new(), redo: Vec::new(), sel: Vec::new(), zoom: 2.0, offset: Vec2::ZERO, fit: true, last_edit: None, mtime }
+        Self { doc, path, name: None, dirty: false, undo: Vec::new(), redo: Vec::new(), sel: Vec::new(), zoom: 2.0, offset: Vec2::ZERO, fit: true, last_edit: None, mtime }
     }
     pub fn title(&self) -> String {
-        let n = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Unbenannt".into());
+        let n = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()).or_else(|| self.name.clone()).unwrap_or_else(|| "Unbenannt".into());
         if self.dirty { format!("{n} *") } else { n }
     }
     pub fn push_undo(&mut self) {
@@ -376,7 +379,7 @@ pub struct Dialogs {
     pub wms_status: String,
     pub qr: Option<Pos>,
     pub qr_text: String,
-    pub pdf_pages: Option<(PathBuf, usize, usize)>,
+    pub pdf_pages: Option<PdfAuswahl>,
     pub pdf_opt: PdfImportOpt,
     pub png_dpi: f32,
     pub png: bool,
@@ -417,6 +420,7 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::canvas::install_fonts(&cc.egui_ctx);
+        plattform::init(&cc.egui_ctx);
         let settings = Settings::load();
         let mut textures = Textures::default();
         textures.quality_high = settings.quality_high;
@@ -460,11 +464,13 @@ impl App {
             last_file_check: 0.0,
         };
         // Datei als Startargument (Doppelklick auf .fplan)
-        if let Some(arg) = std::env::args().nth(1) {
-            let p = PathBuf::from(arg);
-            if p.exists() {
-                app.open_path(&p);
-                app.dlg.welcome = false;
+        if !plattform::IST_WEB {
+            if let Some(arg) = std::env::args().nth(1) {
+                let p = PathBuf::from(arg);
+                if p.exists() {
+                    app.open_path(&p);
+                    app.dlg.welcome = false;
+                }
             }
         }
         app
@@ -517,9 +523,7 @@ impl App {
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Fluchtplan", &["fplan"]).add_filter("Alle Dateien", &["*"]).pick_file() {
-            self.open_path(&p);
-        }
+        plattform::waehlen(Zweck::PlanOeffnen, "Fluchtplan", &["fplan"]);
     }
 
     pub fn open_path(&mut self, p: &std::path::Path) {
@@ -527,27 +531,115 @@ impl App {
             self.active = i;
             return;
         }
-        match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(&s).map_err(|e| e.to_string())) {
-            Ok(doc) => {
-                self.add_tab(DocTab::new(doc, Some(p.to_path_buf())));
-                self.settings.add_recent(p);
-                self.status = format!("Geöffnet: {}", p.display());
+        plattform::datei_laden(Zweck::PlanOeffnen, p.to_path_buf());
+        self.dateien_verarbeiten();
+    }
+
+    /// Gewählte Dateien (Dialog, Drag & Drop, im Browser asynchron) ihrem Zweck zuführen.
+    pub fn dateien_verarbeiten(&mut self) {
+        for e in plattform::fehler() {
+            self.error(e);
+        }
+        for d in plattform::eingang() {
+            self.datei_verarbeiten(d);
+        }
+    }
+
+    pub fn datei_verarbeiten(&mut self, d: Datei) {
+        let area = templates::layout(self.doc()).plan;
+        let plan = |d: &Datei| std::str::from_utf8(&d.bytes).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(s).map_err(|e| e.to_string()));
+        match d.zweck {
+            Zweck::PlanOeffnen => match plan(&d) {
+                Ok(doc) => {
+                    let mut tab = DocTab::new(doc, d.pfad.clone());
+                    if d.pfad.is_none() {
+                        // Browser: Name merken, damit „Speichern“ denselben Dateinamen vorschlägt
+                        tab.name = Some(d.name.trim_end_matches(".fplan").to_string());
+                    }
+                    self.add_tab(tab);
+                    if let Some(p) = &d.pfad {
+                        self.settings.add_recent(p);
+                    }
+                    self.status = format!("Geöffnet: {}", d.name);
+                }
+                Err(e) => self.error(format!("Die Datei konnte nicht geöffnet werden:\n{e}")),
+            },
+            Zweck::PlanEinfuegen => match plan(&d) {
+                Ok(other) => {
+                    let tab = self.tab_mut();
+                    tab.push_undo();
+                    let id = tab.doc.alloc_id();
+                    tab.doc.objects.push(Obj { id, layer: tab.doc.active_layer, kind: ObjKind::Group { children: other.objects }, style: Style::default(), print: true, locked: false });
+                    tab.doc.custom_symbols.extend(other.custom_symbols);
+                    tab.doc.renumber();
+                    tab.sel = vec![tab.doc.objects.last().unwrap().id];
+                    ops::sync_legend(&mut tab.doc);
+                }
+                Err(e) => self.error(e),
+            },
+            Zweck::Bild => match import::load_image_bytes(&d.name, &d.bytes) {
+                Ok(data) => self.insert_image(data, area, 0.6),
+                Err(e) => self.error(e),
+            },
+            // Seite und Importoptionen immer abfragen (wie im Referenzprodukt)
+            Zweck::Pdf => match import::pdf_page_count_bytes(d.bytes.clone()) {
+                Ok(n) => self.dlg.pdf_pages = Some(PdfAuswahl { name: d.name, bytes: std::sync::Arc::new(d.bytes), seiten: n, seite: 0 }),
+                Err(e) => self.error(e),
+            },
+            Zweck::Dxf | Zweck::Dwg => {
+                let bytes = if d.zweck == Zweck::Dwg {
+                    let Some(p) = d.pfad.as_deref() else { return self.error("DWG wird nur in der Desktop-Version unterstützt.") };
+                    match import::dwg_to_dxf(p, "ACAD2010", false).and_then(|x| std::fs::read(x).map_err(|e| e.to_string())) {
+                        Ok(b) => b,
+                        Err(e) => return self.error(e),
+                    }
+                } else {
+                    d.bytes
+                };
+                match import::load_dxf(&bytes, area, self.doc().scale_n, false) {
+                    Ok(objs) => {
+                        let tab = self.tab_mut();
+                        tab.push_undo();
+                        let layer = tab.doc.find_layer_by_name("Grundriss");
+                        let id = tab.doc.alloc_id();
+                        let mut children = objs;
+                        for c in &mut children {
+                            c.layer = layer;
+                        }
+                        tab.doc.objects.insert(0, Obj { id, layer, kind: ObjKind::Group { children }, style: Style::default(), print: true, locked: false });
+                        tab.doc.renumber();
+                        tab.sel.clear();
+                        self.status = "CAD-Grundriss importiert (als Gruppe auf Ebene „Grundriss“).".into();
+                    }
+                    Err(e) => self.error(e),
+                }
             }
-            Err(e) => self.error(format!("Die Datei konnte nicht geöffnet werden:\n{e}")),
+            Zweck::SvgSymbol => match std::str::from_utf8(&d.bytes).map_err(|e| e.to_string()).and_then(custom_symbol_from_svg) {
+                Ok(svg) => {
+                    let name = std::path::Path::new(&d.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Eigenes Symbol".into());
+                    let tab = self.tab_mut();
+                    tab.push_undo();
+                    let id = format!("CUSTOM_{}", tab.doc.custom_symbols.len() + 1);
+                    tab.doc.custom_symbols.push(CustomSymbol { id: id.clone(), name, svg });
+                    self.tool = Tool::Symbol(id);
+                    self.status = "Eigenes Symbol importiert – in den Plan klicken.".into();
+                }
+                Err(e) => self.error(e),
+            },
+            Zweck::Logo => match import::load_image_bytes(&d.name, &d.bytes) {
+                Ok(img) => {
+                    let tab = self.tab_mut();
+                    tab.push_undo();
+                    tab.doc.frame_cfg.logo = Some(img);
+                }
+                Err(e) => self.error(e),
+            },
+            Zweck::WaendeBild => self.waende_aus_datei(d),
+            Zweck::ArchivEntpacken => self.archiv_entpacken(d),
         }
     }
 
     pub fn save(&mut self, save_as: bool) -> bool {
-        let path = match (&self.tab().path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => {
-                let name = format!("{}.fplan", sanitize(&self.doc().info.objekt, &self.doc().info.geschoss));
-                match rfd::FileDialog::new().add_filter("Fluchtplan", &["fplan"]).set_file_name(name).save_file() {
-                    Some(p) => p,
-                    None => return false,
-                }
-            }
-        };
         let json = match serde_json::to_string(&self.doc()) {
             Ok(j) => j,
             Err(e) => {
@@ -555,20 +647,42 @@ impl App {
                 return false;
             }
         };
-        match std::fs::write(&path, json) {
-            Ok(()) => {
+        // Desktop: vorhandene Datei direkt überschreiben; sonst „Speichern unter“ bzw. im Browser herunterladen
+        let res = match (&self.tab().path, save_as, plattform::IST_WEB) {
+            (Some(p), false, false) => std::fs::write(p, &json).map(|_| Some(p.clone())).map_err(|e| format!("Speichern fehlgeschlagen: {e}")),
+            _ => {
+                let base = self.tab().name.clone().unwrap_or_else(|| sanitize(&self.doc().info.objekt, &self.doc().info.geschoss));
+                plattform::speichern_unter(&format!("{base}.fplan"), "Fluchtplan", "fplan", json.as_bytes())
+            }
+        };
+        match res {
+            Ok(Some(path)) => {
                 let t = self.tab_mut();
-                t.path = Some(path.clone());
                 t.dirty = false;
-                t.mtime = file_mtime(&path);
-                self.settings.add_recent(&path);
+                if plattform::IST_WEB {
+                    t.name = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+                } else {
+                    t.mtime = file_mtime(&path);
+                    t.path = Some(path.clone());
+                    self.settings.add_recent(&path);
+                }
                 self.status = format!("Gespeichert: {}", path.display());
                 true
             }
+            Ok(None) => false,
             Err(e) => {
-                self.error(format!("Speichern fehlgeschlagen: {e}"));
+                self.error(e);
                 false
             }
+        }
+    }
+
+    /// Exportdatei speichern (Desktop: Dialog, Browser: Download) und Status melden.
+    fn ausgeben(&mut self, name: String, filter: &str, endung: &str, inhalt: Result<Vec<u8>, String>, meldung: impl FnOnce(&std::path::Path) -> String) {
+        match inhalt.and_then(|b| plattform::speichern_unter(&name, filter, endung, &b)) {
+            Ok(Some(p)) => self.status = meldung(&p),
+            Ok(None) => {}
+            Err(e) => self.error(e),
         }
     }
 
@@ -625,165 +739,82 @@ impl App {
         }
     }
 
+    fn dateiname(&self) -> String {
+        self.tab().name.clone().unwrap_or_else(|| sanitize(&self.doc().info.objekt, &self.doc().info.geschoss))
+    }
+
     pub fn export_pdf(&mut self, stamp: Stamp) {
-        let name = format!("{}.pdf", sanitize(&self.doc().info.objekt, &self.doc().info.geschoss));
-        let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file() else { return };
-        match export::export_pdf(&[self.doc()], stamp, &p) {
-            Ok(()) => self.status = format!("PDF erstellt: {}", p.display()),
-            Err(e) => self.error(e),
-        }
+        let name = format!("{}.pdf", self.dateiname());
+        let pdf = export::pdf_bytes(&[self.doc()], stamp);
+        self.ausgeben(name, "PDF", "pdf", pdf, |p| format!("PDF erstellt: {}", p.display()));
     }
 
     pub fn export_merged(&mut self, which: &[usize]) {
-        let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name("Plaene.pdf").save_file() else { return };
         let docs: Vec<&Doc> = which.iter().filter_map(|i| self.tabs.get(*i)).map(|t| &t.doc).collect();
-        match export::export_pdf(&docs, Stamp::Keiner, &p) {
-            Ok(()) => self.status = format!("{} Pläne in {} zusammengeführt.", docs.len(), p.display()),
-            Err(e) => self.error(e),
-        }
+        let n = docs.len();
+        let pdf = export::pdf_bytes(&docs, Stamp::Keiner);
+        self.ausgeben("Plaene.pdf".into(), "PDF", "pdf", pdf, |p| format!("{n} Pläne in {} zusammengeführt.", p.display()));
     }
 
     pub fn print(&mut self) {
-        let p = std::env::temp_dir().join(format!("Fluchtplan_Druck_{}.pdf", std::process::id()));
-        match export::export_pdf(&[self.doc()], Stamp::Keiner, &p) {
-            Ok(()) => {
-                if let Err(e) = open::that(&p) {
-                    self.error(format!("PDF-Anzeige konnte nicht geöffnet werden: {e}"));
-                } else {
-                    self.status = "Druckvorschau geöffnet – bitte dort drucken (Seitenanpassung: „Tatsächliche Größe“).".into();
-                }
-            }
+        match export::pdf_bytes(&[self.doc()], Stamp::Keiner).and_then(|b| plattform::pdf_anzeigen(&b)) {
+            Ok(()) => self.status = "Druckvorschau geöffnet – bitte dort drucken (Seitenanpassung: „Tatsächliche Größe“).".into(),
             Err(e) => self.error(e),
         }
     }
 
     pub fn export_other(&mut self, kind: &str) {
-        let base = sanitize(&self.doc().info.objekt, &self.doc().info.geschoss);
-        let res = match kind {
-            "dxf" => rfd::FileDialog::new().add_filter("AutoCAD DXF", &["dxf"]).set_file_name(format!("{base}.dxf")).save_file().map(|p| export::export_dxf(self.doc(), &p).map(|_| p)),
-            "svg" => rfd::FileDialog::new().add_filter("SVG", &["svg"]).set_file_name(format!("{base}.svg")).save_file().map(|p| export::export_svg(self.doc(), &p).map(|_| p)),
-            "png" => rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(format!("{base}.png")).save_file().map(|p| export::export_png(self.doc(), self.dlg.png_dpi, &p).map(|_| p)),
-            "dwg" => rfd::FileDialog::new().add_filter("AutoCAD DWG", &["dwg"]).set_file_name(format!("{base}.dwg")).save_file().map(|p| {
-                let tmp = std::env::temp_dir().join(format!("{base}.dxf"));
-                export::export_dxf(self.doc(), &tmp).and_then(|_| import::dwg_to_dxf(&tmp, "ACAD2010", true)).and_then(|out| std::fs::copy(&out, &p).map(|_| p.clone()).map_err(|e| e.to_string()))
-            }),
-            _ => None,
-        };
-        match res {
-            Some(Ok(p)) => self.status = format!("Exportiert: {}", p.display()),
-            Some(Err(e)) => self.error(e),
-            None => {}
-        }
-    }
-
-    pub fn import_dialog(&mut self, kind: &str) {
-        let area = templates::layout(self.doc()).plan;
+        let base = self.dateiname();
+        let meldung = |p: &std::path::Path| format!("Exportiert: {}", p.display());
         match kind {
-            "bild" => {
-                let Some(p) = rfd::FileDialog::new().add_filter("Bilder", &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"]).pick_file() else { return };
-                match import::load_image_file(&p) {
-                    Ok(data) => self.insert_image(data, area, 0.6),
-                    Err(e) => self.error(e),
-                }
-            }
-            "pdf" => {
-                let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file() else { return };
-                // Seite und Importoptionen immer abfragen (wie im Referenzprodukt)
-                match import::pdf_page_count(&p) {
-                    Ok(n) => self.dlg.pdf_pages = Some((p, n, 0)),
-                    Err(e) => self.error(e),
-                }
-            }
-            "dxf" | "dwg" => {
-                let filter: &[&str] = if kind == "dxf" { &["dxf"] } else { &["dwg"] };
-                let Some(p) = rfd::FileDialog::new().add_filter(kind.to_uppercase(), filter).pick_file() else { return };
-                let path = if kind == "dwg" {
-                    match import::dwg_to_dxf(&p, "ACAD2010", false) {
-                        Ok(x) => x,
-                        Err(e) => return self.error(e),
-                    }
-                } else {
-                    p
-                };
-                match import::load_dxf(&path, area, self.doc().scale_n, false) {
-                    Ok(objs) => {
-                        let tab = self.tab_mut();
-                        tab.push_undo();
-                        let layer = tab.doc.find_layer_by_name("Grundriss");
-                        let id = tab.doc.alloc_id();
-                        let mut children = objs;
-                        for c in &mut children {
-                            c.layer = layer;
-                        }
-                        tab.doc.objects.insert(0, Obj { id, layer, kind: ObjKind::Group { children }, style: Style::default(), print: true, locked: false });
-                        tab.doc.renumber();
-                        tab.sel.clear();
-                        self.status = "CAD-Grundriss importiert (als Gruppe auf Ebene „Grundriss“).".into();
-                    }
-                    Err(e) => self.error(e),
-                }
-            }
-            "plan" => {
-                let Some(p) = rfd::FileDialog::new().add_filter("Fluchtplan", &["fplan"]).pick_file() else { return };
-                match std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(&s).map_err(|e| e.to_string())) {
-                    Ok(other) => {
-                        let tab = self.tab_mut();
-                        tab.push_undo();
-                        let id = tab.doc.alloc_id();
-                        tab.doc.objects.push(Obj { id, layer: tab.doc.active_layer, kind: ObjKind::Group { children: other.objects }, style: Style::default(), print: true, locked: false });
-                        tab.doc.custom_symbols.extend(other.custom_symbols);
-                        tab.doc.renumber();
-                        tab.sel = vec![tab.doc.objects.last().unwrap().id];
-                        ops::sync_legend(&mut tab.doc);
-                    }
-                    Err(e) => self.error(e),
-                }
+            "dxf" => {
+                let b = export::dxf_bytes(self.doc());
+                self.ausgeben(format!("{base}.dxf"), "AutoCAD DXF", "dxf", b, meldung);
             }
             "svg" => {
-                let Some(p) = rfd::FileDialog::new().add_filter("SVG-Symbol", &["svg"]).pick_file() else { return };
-                match std::fs::read_to_string(&p) {
-                    Ok(src) => match custom_symbol_from_svg(&src) {
-                        Ok(svg) => {
-                            let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Eigenes Symbol".into());
-                            let tab = self.tab_mut();
-                            tab.push_undo();
-                            let id = format!("CUSTOM_{}", tab.doc.custom_symbols.len() + 1);
-                            tab.doc.custom_symbols.push(CustomSymbol { id: id.clone(), name, svg });
-                            self.tool = Tool::Symbol(id);
-                            self.status = "Eigenes Symbol importiert – in den Plan klicken.".into();
-                        }
-                        Err(e) => self.error(e),
-                    },
-                    Err(e) => self.error(e.to_string()),
-                }
+                let b = Ok(export::plan_svg(self.doc(), Stamp::Keiner).into_bytes());
+                self.ausgeben(format!("{base}.svg"), "SVG", "svg", b, meldung);
             }
-            "logo" => {
-                let Some(p) = rfd::FileDialog::new().add_filter("Bilder", &["png", "jpg", "jpeg"]).pick_file() else { return };
-                match import::load_image_file(&p) {
-                    Ok(d) => {
-                        let tab = self.tab_mut();
-                        tab.push_undo();
-                        tab.doc.frame_cfg.logo = Some(d);
-                    }
-                    Err(e) => self.error(e),
-                }
+            "png" => {
+                let b = export::render_png(self.doc(), self.dlg.png_dpi);
+                self.ausgeben(format!("{base}.png"), "PNG", "png", b, meldung);
+            }
+            "dwg" => {
+                // nur Desktop: über den ODA File Converter
+                let tmp = std::env::temp_dir().join(format!("{base}.dxf"));
+                let b = export::export_dxf(self.doc(), &tmp).and_then(|_| import::dwg_to_dxf(&tmp, "ACAD2010", true)).and_then(|out| std::fs::read(out).map_err(|e| e.to_string()));
+                self.ausgeben(format!("{base}.dwg"), "AutoCAD DWG", "dwg", b, meldung);
             }
             _ => {}
         }
     }
 
-    pub fn import_pdf_page(&mut self, p: &std::path::Path, page: usize) {
+    pub fn import_dialog(&mut self, kind: &str) {
+        match kind {
+            "bild" => plattform::waehlen(Zweck::Bild, "Bilder", &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"]),
+            "pdf" => plattform::waehlen(Zweck::Pdf, "PDF", &["pdf"]),
+            "dxf" => plattform::waehlen(Zweck::Dxf, "DXF", &["dxf"]),
+            "dwg" => plattform::waehlen(Zweck::Dwg, "DWG", &["dwg"]),
+            "plan" => plattform::waehlen(Zweck::PlanEinfuegen, "Fluchtplan", &["fplan"]),
+            "svg" => plattform::waehlen(Zweck::SvgSymbol, "SVG-Symbol", &["svg"]),
+            "logo" => plattform::waehlen(Zweck::Logo, "Bilder", &["png", "jpg", "jpeg"]),
+            _ => {}
+        }
+        self.dateien_verarbeiten();
+    }
+
+    pub fn import_pdf_page(&mut self, bytes: &[u8], page: usize) {
         let area = templates::layout(self.doc()).plan;
-        match import::pdf_page_image(p, page, 200.0) {
+        match import::pdf_page_image_bytes(bytes.to_vec(), page, 200.0) {
             Ok(data) => self.insert_image(data, area, 0.6),
             Err(e) => self.error(e),
         }
     }
 
     /// PDF-Seite als bearbeitbare Vektorobjekte importieren.
-    pub fn import_pdf_vector(&mut self, p: &std::path::Path, page: usize) {
+    pub fn import_pdf_vector(&mut self, bytes: &[u8], page: usize) {
         let opt = self.dlg.pdf_opt;
-        let pg = match crate::pdfvec::read_page(p, page) {
+        let pg = match crate::pdfvec::read_page_bytes(bytes.to_vec(), page) {
             Ok(pg) => pg,
             Err(e) => return self.error(e),
         };

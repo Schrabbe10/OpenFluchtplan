@@ -25,7 +25,7 @@ fn dxf_hin_und_zurueck() {
     let p = tmp("rundlauf.dxf");
     export::export_dxf(&doc, &p).unwrap();
     let area = templates::layout(&doc).plan;
-    let objs = import::load_dxf(&p, area, doc.scale_n, false).unwrap();
+    let objs = import::load_dxf(&std::fs::read(&p).unwrap(), area, doc.scale_n, false).unwrap();
     assert!(objs.len() > 100, "nur {} Objekte", objs.len());
     // Linien (Texte ragen je nach Schriftbreite über den Ankerpunkt hinaus)
     let bb = objs.iter().filter(|o| matches!(o.kind, ObjKind::Polyline { .. })).fold(BBox::EMPTY, |b, o| b.union(ops::bounds(&o.kind)));

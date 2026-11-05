@@ -1,6 +1,5 @@
 //! Flurkarten und amtliche Karten über WMS (OGC Web Map Service 1.3.0, EPSG:3857).
 
-use std::io::Read;
 
 use crate::model::ImageData;
 
@@ -45,15 +44,7 @@ fn base(url: &str) -> String {
 }
 
 fn get_bytes(url: &str, query: &[(&str, &str)]) -> Result<(Vec<u8>, String), String> {
-    let mut req = crate::osm::agent().get(url);
-    for (k, v) in query {
-        req = req.query(*k, *v);
-    }
-    let mut resp = req.call().map_err(|e| format!("Kartendienst nicht erreichbar: {e}"))?;
-    let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    let mut bytes = Vec::new();
-    resp.body_mut().as_reader().read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    Ok((bytes, ct))
+    crate::osm::http_get(url, query).map_err(|e| format!("Kartendienst: {e}"))
 }
 
 /// Dienstbeschreibung abrufen.

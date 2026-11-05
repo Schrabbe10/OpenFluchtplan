@@ -1,4 +1,5 @@
 /target
+/dist
 # lokale Build-Einstellungen (z. B. Netzwerk-/Proxy-Anpassungen)
 /.cargo
 *.fplan

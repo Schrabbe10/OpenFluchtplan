@@ -541,8 +541,12 @@ pub fn place(doc: &mut Doc, pg: PdfPage, opt: PdfImportOpt) -> Vec<u64> {
 }
 
 /// Liest eine PDF-Seite als Vektorobjekte.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn read_page(path: &Path, page: usize) -> Result<PdfPage, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    read_page_bytes(std::fs::read(path).map_err(|e| e.to_string())?, page)
+}
+
+pub fn read_page_bytes(bytes: Vec<u8>, page: usize) -> Result<PdfPage, String> {
     let pdf = hayro::hayro_syntax::Pdf::new(bytes).map_err(|e| format!("PDF nicht lesbar: {e:?}"))?;
     let pages = pdf.pages();
     let pg = pages.get(page).ok_or("Seite nicht vorhanden")?;

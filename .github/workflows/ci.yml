@@ -20,3 +20,15 @@ jobs:
         with:
           name: OpenFluchtplan
           path: target/release/OpenFluchtplan.exe
+
+  # Stellt sicher, dass jede Änderung auch im Browser kompiliert (gemeinsamer Code für Desktop und Web)
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Browser-Version prüfen
+        run: cargo build --release --target wasm32-unknown-unknown

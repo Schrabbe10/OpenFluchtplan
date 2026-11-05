@@ -32,9 +32,18 @@ Die vollständige Anleitung steht in [docs/Bedienungsanleitung.md](docs/Bedienun
 
 ## Download und Start
 
-Die fertige `OpenFluchtplan.exe` liegt unter [Releases](../../releases). Herunterladen und starten,
-auch vom Netzlaufwerk oder USB-Stick. Es werden keine Laufzeitumgebung und keine
-Administratorrechte benötigt. Läuft unter Windows 10/11 und Windows Server.
+**Im Browser:** <https://schrabbe10.github.io/OpenFluchtplan/>. Ohne Installation und ohne Anmeldung.
+Das Programm läuft vollständig im Browser, Pläne werden nicht hochgeladen. Öffnen und Speichern
+laufen über Datei-Upload bzw. -Download. Es braucht einen aktuellen Chrome, Edge oder Firefox.
+
+**Für Windows:** Die fertige `OpenFluchtplan.exe` liegt unter [Releases](../../releases).
+Herunterladen und starten, auch vom Netzlaufwerk oder USB-Stick. Es werden keine
+Laufzeitumgebung und keine Administratorrechte benötigt. Läuft unter Windows 10/11 und Windows
+Server.
+
+Beide Versionen entstehen aus demselben Code. Nur in der Desktop-Version gibt es Kartendienste
+(OpenStreetMap, WMS), DWG über den ODA File Converter, Kommandozeile/MCP und das automatische
+Nachladen extern geänderter Pläne. Alle plattformabhängigen Teile stehen in `src/plattform.rs`.
 
 ## Selbst bauen
 
@@ -46,6 +55,10 @@ cargo test --release
 ```
 
 Die exe liegt danach unter `target/release/OpenFluchtplan.exe`.
+
+Webversion lokal: `rustup target add wasm32-unknown-unknown`, [Trunk](https://trunkrs.dev)
+installieren, dann `trunk serve` und <http://127.0.0.1:8080> öffnen. Bei jedem Push auf `main`
+baut GitHub Actions die Webversion und veröffentlicht sie auf GitHub Pages.
 
 Aufbau des Codes (`src/`):
 
@@ -60,6 +73,7 @@ Aufbau des Codes (`src/`):
 | `pdfvec.rs`, `import.rs`, `export.rs` | PDF-Vektorimport, Import, Export |
 | `pruefung.rs` | Normprüfung |
 | `schnittstelle.rs` | Kommandozeile und MCP-Server |
+| `plattform.rs` | Unterschiede Desktop/Browser (Dateien, Einstellungen, Schriften) |
 | `osm.rs`, `wms.rs` | Kartendienste |
 | `tests.rs`, `ui_tests.rs` | Tests (die Oberflächentests laufen ohne Bildschirm) |
 
@@ -82,7 +96,8 @@ Brandschutzdienststelle. Normtexte sind nicht enthalten. Die Symbole sind eigene
 Anlehnung an die genannten Normen. Wo amtliche Originalgrafiken vorgeschrieben sind, können sie
 als SVG eingebunden werden.
 
-Verwendete Bibliotheken: siehe `Cargo.toml` (überwiegend MIT/Apache-2.0). Kartendaten:
+Verwendete Bibliotheken: siehe `Cargo.toml` (überwiegend MIT/Apache-2.0). Schrift der
+Webversion: Liberation Sans (`assets/fonts`, SIL Open Font License 1.1). Kartendaten:
 © OpenStreetMap-Mitwirkende (ODbL) bzw. Nutzungsbedingungen des jeweiligen WMS-Dienstes.
 
 ---

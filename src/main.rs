@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod plattform;
 mod bso;
 mod canvas;
 mod dialogs;
@@ -19,6 +20,7 @@ mod pdfvec;
 mod presets;
 mod render;
 mod samples;
+#[cfg(not(target_arch = "wasm32"))]
 mod schnittstelle;
 mod symbols;
 mod templates;
@@ -53,22 +55,27 @@ impl eframe::App for app::App {
                 self.settings.save();
             }
         }
-        // Dateien per Drag & Drop
-        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
-        for p in dropped {
-            match p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
-                Some("fplan") => self.open_path(&p),
-                Some("png" | "jpg" | "jpeg" | "bmp" | "tif" | "tiff") => match import::load_image_file(&p) {
-                    Ok(d) => {
-                        let area = templates::layout(self.doc()).plan;
-                        self.insert_image(d, area, 0.6);
-                    }
-                    Err(e) => self.error(e),
-                },
-                Some("pdf") => self.import_pdf_page(&p, 0),
-                _ => self.error(format!("Dateityp nicht unterstützt: {}", p.display())),
-            }
+        // Dateien per Drag & Drop (Desktop: Pfad, Browser: Inhalt)
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for f in dropped {
+            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = std::path::Path::new(&name).extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+            let zweck = match ext.as_str() {
+                "fplan" => plattform::Zweck::PlanOeffnen,
+                "png" | "jpg" | "jpeg" | "bmp" | "tif" | "tiff" | "gif" => plattform::Zweck::Bild,
+                "pdf" => plattform::Zweck::Pdf,
+                "dxf" => plattform::Zweck::Dxf,
+                "svg" => plattform::Zweck::SvgSymbol,
+                "zip" => plattform::Zweck::ArchivEntpacken,
+                _ => {
+                    self.error(format!("Dateityp nicht unterstützt: {name}"));
+                    continue;
+                }
+            };
+            plattform::abgelegt(zweck, f);
         }
+        // gewählte Dateien (im Browser asynchron eingetroffen)
+        self.dateien_verarbeiten();
 
         self.shortcuts(&ctx);
 
@@ -80,6 +87,10 @@ impl eframe::App for app::App {
         let title = format!("OpenFluchtplan – {}", self.tab().title());
         if title != self.last_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            #[cfg(target_arch = "wasm32")]
+            if let Some(d) = web_sys::window().and_then(|w| w.document()) {
+                d.set_title(&title);
+            }
             self.last_title = title;
         }
 
@@ -138,6 +149,7 @@ impl eframe::App for app::App {
 }
 
 /// Fenstersymbol aus dem eigenen Notausgang-Piktogramm.
+#[cfg(not(target_arch = "wasm32"))]
 fn app_icon() -> egui::IconData {
     let size = 64u32;
     let svg = symbols::find("E002").map(|s| s.svg.clone()).unwrap_or_default();
@@ -153,6 +165,26 @@ fn app_icon() -> egui::IconData {
     egui::IconData { rgba, width: size, height: size }
 }
 
+/// Browser: Start im <canvas id="openfluchtplan"> der index.html.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use wasm_bindgen::JsCast;
+    console_error_panic_hook::set_once();
+    wasm_bindgen_futures::spawn_local(async {
+        let document = web_sys::window().and_then(|w| w.document()).expect("document");
+        let canvas = document.get_element_by_id("openfluchtplan").expect("canvas fehlt").unchecked_into::<web_sys::HtmlCanvasElement>();
+        let res = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), Box::new(|cc| Ok(Box::new(app::App::new(cc))))).await;
+        // Ladeanzeige entfernen bzw. Fehler zeigen
+        if let Some(el) = document.get_element_by_id("laden") {
+            match res {
+                Ok(()) => el.remove(),
+                Err(e) => el.set_inner_html(&format!("OpenFluchtplan konnte nicht gestartet werden: {e:?}<br>Bitte einen aktuellen Browser (Chrome, Edge, Firefox) verwenden.")),
+            }
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     use eframe::{egui_wgpu, wgpu};
 

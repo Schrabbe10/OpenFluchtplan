@@ -182,6 +182,10 @@ impl App {
             }
             ui.menu_button("Importieren …", |ui| {
                 for (k, n) in [("bild", "Grundriss als Bild (PNG/JPG/BMP/TIF) …"), ("pdf", "Grundriss aus PDF …"), ("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("plan", "Anderen Plan einfügen …"), ("svg", "Eigenes Symbol (SVG) …")] {
+                    // DWG braucht ein externes Programm – nur Desktop
+                    if k == "dwg" && crate::plattform::IST_WEB {
+                        continue;
+                    }
                     if ui.button(n).clicked() {
                         self.import_dialog(k);
                         ui.close();
@@ -190,6 +194,9 @@ impl App {
             });
             ui.menu_button("Exportieren …", |ui| {
                 for (k, n) in [("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("svg", "SVG-Vektorgrafik …")] {
+                    if k == "dwg" && crate::plattform::IST_WEB {
+                        continue;
+                    }
                     if ui.button(n).clicked() {
                         self.export_other(k);
                         ui.close();

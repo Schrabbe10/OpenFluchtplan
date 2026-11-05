@@ -94,6 +94,13 @@ pub fn install_fonts(ctx: &egui::Context) {
     add("arialbd", "arialbd.ttf", FontFamily::Name("plan_bold".into()));
     add("ariali", "ariali.ttf", FontFamily::Name("plan_italic".into()));
     add("arialbi", "arialbi.ttf", FontFamily::Name("plan_bold_italic".into()));
+    // Browser: mitgelieferte, zu Arial maßgleiche Schrift (Reihenfolge wie Arial oben)
+    for (i, bytes) in crate::plattform::SCHRIFTEN.iter().enumerate() {
+        let fam = ["plan", "plan_bold", "plan_italic", "plan_bold_italic"][i];
+        let key = format!("liberation_{fam}");
+        fonts.font_data.insert(key.clone(), egui::FontData::from_static(bytes).into());
+        fonts.families.entry(FontFamily::Name(fam.into())).or_default().push(key);
+    }
     // Rückfall auf Standardschrift, falls Arial fehlt
     for fam in ["plan", "plan_bold", "plan_italic", "plan_bold_italic"] {
         let e = fonts.families.entry(FontFamily::Name(fam.into())).or_default();

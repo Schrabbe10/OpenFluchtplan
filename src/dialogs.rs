@@ -527,13 +527,14 @@ impl App {
             }
         }
         // PDF-Seite wählen
-        if let Some((path, n, mut page)) = self.dlg.pdf_pages.clone() {
+        if let Some(mut auswahl) = self.dlg.pdf_pages.clone() {
+            let (n, mut page) = (auswahl.seiten, auswahl.seite);
             let mut open = true;
             let mut go = false;
             win("PDF importieren").open(&mut open).show(ctx, |ui| {
                 use crate::app::PdfFit;
                 let o = &mut self.dlg.pdf_opt;
-                let name = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = &auswahl.name;
                 ui.label(if n == 1 { format!("{name} (1 Seite)") } else { format!("{name} hat {n} Seiten.") });
                 if n > 1 {
                     let mut p1 = page + 1;
@@ -555,13 +556,14 @@ impl App {
                 }
                 go = ui.button("Importieren").clicked();
             });
-            self.dlg.pdf_pages = if open { Some((path.clone(), n, page)) } else { None };
+            auswahl.seite = page;
+            self.dlg.pdf_pages = if open { Some(auswahl.clone()) } else { None };
             if go {
                 self.dlg.pdf_pages = None;
                 if self.dlg.pdf_opt.vector {
-                    self.import_pdf_vector(&path, page);
+                    self.import_pdf_vector(&auswahl.bytes, page);
                 } else {
-                    self.import_pdf_page(&path, page);
+                    self.import_pdf_page(&auswahl.bytes, page);
                 }
             }
         }
@@ -772,34 +774,44 @@ impl App {
                     }
                     _ => (None, Pos::default(), Pos::default()),
                 }
-            } else if let Some(p) = rfd::FileDialog::new().add_filter("Bilder", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"]).pick_file() {
-                let img = image::open(&p).ok();
-                let area = templates::layout(self.doc()).plan;
-                let (a, b) = img.as_ref().map(|i| import::fit_rect(area, i.width(), i.height())).unwrap_or((area.min, area.max));
-                (img, a, b)
             } else {
-                (None, Pos::default(), Pos::default())
+                // Bilddatei wählen – im Browser asynchron, weiter in `waende_aus_datei`
+                self.dlg.extract = false;
+                crate::plattform::waehlen(crate::plattform::Zweck::WaendeBild, "Bilder", &["png", "jpg", "jpeg", "bmp", "tif", "tiff"]);
+                self.dateien_verarbeiten();
+                return;
             };
-            match img {
-                Some(img) => {
-                    let walls = extract::extract_walls(&img, a, b, self.dlg.extract_threshold, self.dlg.extract_min_mm);
-                    let n = walls.len();
-                    let tab = self.tab_mut();
-                    tab.push_undo();
-                    let layer = tab.doc.find_layer_by_name("Wände");
-                    let mut ids = Vec::new();
-                    for w in walls {
-                        ids.push(tab.doc.add(w, Style::line(farbe::SCHWARZ, 1.0), layer));
-                    }
-                    tab.sel = ids;
-                    self.status = format!("{n} Wände erkannt. Nicht passende Wände einfach löschen.");
-                    open = false;
-                }
-                None if from_sel || self.dlg.extract => {}
-                None => {}
+            if let Some(img) = img {
+                self.waende_extrahieren(&img, a, b);
+                open = false;
             }
         }
         self.dlg.extract = open;
+    }
+
+    pub fn waende_aus_datei(&mut self, d: crate::plattform::Datei) {
+        match image::load_from_memory(&d.bytes) {
+            Ok(img) => {
+                let area = templates::layout(self.doc()).plan;
+                let (a, b) = import::fit_rect(area, img.width(), img.height());
+                self.waende_extrahieren(&img, a, b);
+            }
+            Err(e) => self.error(format!("Bild nicht lesbar: {e}")),
+        }
+    }
+
+    fn waende_extrahieren(&mut self, img: &image::DynamicImage, a: Pos, b: Pos) {
+        let walls = extract::extract_walls(img, a, b, self.dlg.extract_threshold, self.dlg.extract_min_mm);
+        let n = walls.len();
+        let tab = self.tab_mut();
+        tab.push_undo();
+        let layer = tab.doc.find_layer_by_name("Wände");
+        let mut ids = Vec::new();
+        for w in walls {
+            ids.push(tab.doc.add(w, Style::line(farbe::SCHWARZ, 1.0), layer));
+        }
+        tab.sel = ids;
+        self.status = format!("{n} Wände erkannt. Nicht passende Wände einfach löschen.");
     }
 
     fn dlg_bso(&mut self, ctx: &egui::Context) {
@@ -1163,57 +1175,73 @@ impl App {
 
     pub fn archive(&mut self) {
         let base = crate::app::sanitize(&self.doc().info.objekt, &self.doc().info.geschoss);
-        let Some(p) = rfd::FileDialog::new().add_filter("ZIP-Archiv", &["zip"]).set_file_name(format!("{base}.zip")).save_file() else { return };
-        let res = (|| -> Result<usize, String> {
-            let f = std::fs::File::create(&p).map_err(|e| e.to_string())?;
-            let mut z = zip::ZipWriter::new(f);
+        let res = (|| -> Result<(usize, Vec<u8>), String> {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut z = zip::ZipWriter::new(&mut buf);
             let opt = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             let mut n = 0;
             for (i, t) in self.tabs.iter().enumerate() {
-                let name = t.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| format!("Plan_{}", i + 1));
+                let name = t.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()).or_else(|| t.name.clone()).unwrap_or_else(|| format!("Plan_{}", i + 1));
                 z.start_file(format!("{name}.fplan"), opt).map_err(|e| e.to_string())?;
                 z.write_all(serde_json::to_string(&t.doc).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| e.to_string())?;
-                let tmp = std::env::temp_dir().join(format!("fp_arch_{i}.pdf"));
-                export::export_pdf(&[&t.doc], export::Stamp::Keiner, &tmp)?;
                 z.start_file(format!("{name}.pdf"), opt).map_err(|e| e.to_string())?;
-                z.write_all(&std::fs::read(&tmp).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                z.write_all(&export::pdf_bytes(&[&t.doc], export::Stamp::Keiner)?).map_err(|e| e.to_string())?;
                 n += 1;
             }
             z.finish().map_err(|e| e.to_string())?;
-            Ok(n)
+            Ok((n, buf.into_inner()))
         })();
-        match res {
-            Ok(n) => self.status = format!("{n} Plan/Pläne mit PDF archiviert: {}", p.display()),
+        match res.and_then(|(n, b)| crate::plattform::speichern_unter(&format!("{base}.zip"), "ZIP-Archiv", "zip", &b).map(|p| (n, p))) {
+            Ok((n, Some(p))) => self.status = format!("{n} Plan/Pläne mit PDF archiviert: {}", p.display()),
+            Ok((_, None)) => {}
             Err(e) => self.error(format!("Archivieren fehlgeschlagen: {e}")),
         }
     }
 
     pub fn unarchive(&mut self) {
-        let Some(p) = rfd::FileDialog::new().add_filter("ZIP-Archiv", &["zip"]).pick_file() else { return };
-        let Some(dir) = rfd::FileDialog::new().set_title("Zielordner wählen").pick_folder() else { return };
-        let res = (|| -> Result<Vec<std::path::PathBuf>, String> {
-            let f = std::fs::File::open(&p).map_err(|e| e.to_string())?;
-            let mut z = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
+        crate::plattform::waehlen(crate::plattform::Zweck::ArchivEntpacken, "ZIP-Archiv", &["zip"]);
+        self.dateien_verarbeiten();
+    }
+
+    /// Archiv öffnen: Desktop entpackt in einen Ordner, im Browser werden die Pläne direkt geöffnet.
+    pub fn archiv_entpacken(&mut self, d: crate::plattform::Datei) {
+        let dir = if crate::plattform::IST_WEB {
+            None
+        } else {
+            match crate::plattform::ordner_waehlen("Zielordner wählen") {
+                Some(d) => Some(d),
+                None => return,
+            }
+        };
+        let res = (|| -> Result<Vec<(String, Vec<u8>, Option<std::path::PathBuf>)>, String> {
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(&d.bytes)).map_err(|e| e.to_string())?;
             let mut plans = Vec::new();
             for i in 0..z.len() {
                 let mut file = z.by_index(i).map_err(|e| e.to_string())?;
                 let Some(name) = file.enclosed_name() else { continue };
-                let out = dir.join(name.file_name().unwrap_or_default());
+                let fname = name.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 let mut buf = Vec::new();
                 file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-                std::fs::write(&out, buf).map_err(|e| e.to_string())?;
-                if out.extension().and_then(|e| e.to_str()) == Some("fplan") {
-                    plans.push(out);
+                let out = dir.as_ref().map(|d| d.join(&fname));
+                if let Some(o) = &out {
+                    std::fs::write(o, &buf).map_err(|e| e.to_string())?;
+                }
+                if fname.ends_with(".fplan") {
+                    plans.push((fname, buf, out));
                 }
             }
             Ok(plans)
         })();
         match res {
             Ok(plans) => {
-                for pl in &plans {
-                    self.open_path(pl);
+                let n = plans.len();
+                for (name, bytes, pfad) in plans {
+                    self.datei_verarbeiten(crate::plattform::Datei { zweck: crate::plattform::Zweck::PlanOeffnen, name, bytes, pfad });
                 }
-                self.status = format!("{} Plan/Pläne entpackt nach {}", plans.len(), dir.display());
+                self.status = match dir {
+                    Some(d) => format!("{n} Plan/Pläne entpackt nach {}", d.display()),
+                    None => format!("{n} Plan/Pläne aus dem Archiv geöffnet."),
+                };
             }
             Err(e) => self.error(format!("Dearchivieren fehlgeschlagen: {e}")),
         }
