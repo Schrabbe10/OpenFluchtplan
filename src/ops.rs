@@ -156,6 +156,12 @@ pub fn hit_obj_umriss(o: &Obj, p: Pos, tol: f32) -> bool {
 /// Berücksichtigt nur Objekte aus `ids`, die höchstens `max_mm` groß sind; zwei Objekte gehören
 /// zusammen, wenn die Mitte des einen im anderen liegt. Liefert die Anzahl neuer Gruppen.
 pub fn symbole_zusammenfassen(doc: &mut Doc, ids: &[u64], max_mm: f32) -> usize {
+    teile_gruppieren(doc, ids, max_mm, true)
+}
+
+/// Wie [`symbole_zusammenfassen`]; mit `reihenfolge = false` werden Teile auch dann gruppiert, wenn
+/// ein fremdes Objekt dazwischen liegt (z. B. ein Schild auf einer Wand, das danach ersetzt wird).
+pub fn teile_gruppieren(doc: &mut Doc, ids: &[u64], max_mm: f32, reihenfolge: bool) -> usize {
     let cand: Vec<(usize, BBox)> = doc
         .objects
         .iter()
@@ -210,7 +216,7 @@ pub fn symbole_zusammenfassen(doc: &mut Doc, ids: &[u64], max_mm: f32) -> usize 
     // Zeichenreihenfolge ändern – solche Teile bleiben einzeln.
     let boxes: Vec<BBox> = doc.objects.iter().map(|o| bounds_doc(doc, &o.kind)).collect();
     for (&r, c) in count.iter_mut() {
-        if *c < 2 {
+        if *c < 2 || !reihenfolge {
             continue;
         }
         let b = cbox[r];
