@@ -148,6 +148,26 @@ pub struct ImageData {
     pub h: u32,
 }
 
+/// Art eines Planbausteins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockArt {
+    Regeln,
+    Schriftfeld,
+    Notruf,
+    Sammelstelle,
+}
+
+impl BlockArt {
+    pub fn name(self) -> &'static str {
+        match self {
+            BlockArt::Regeln => "Verhaltensregeln",
+            BlockArt::Schriftfeld => "Schriftfeld",
+            BlockArt::Notruf => "Notruf",
+            BlockArt::Sammelstelle => "Sammelstelle",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ObjKind {
     Line { a: Pos, b: Pos },
@@ -176,6 +196,8 @@ pub enum ObjKind {
     Route { pts: Vec<Pos>, width: f32, curved: bool, arrows: bool },
     Symbol { id: String, pos: Pos, size: f32, rot: f32 },
     Legend { a: Pos, b: Pos, cols: u32, size: f32 },
+    /// Planbaustein (Verhaltensregeln, Schriftfeld …), aus den Plandaten gefüllt
+    Block { a: Pos, b: Pos, art: BlockArt },
     Grid { a: Pos, b: Pos, nx: u32, ny: u32 },
     /// Pfad aus mehreren Teilzügen (z. B. aus PDF-Import); Füllung nach Gerade-Ungerade-Regel
     Path { subpaths: Vec<Vec<Pos>>, closed: bool },
@@ -372,6 +394,8 @@ impl Default for FrameCfg {
 pub struct PlanInfo {
     pub objekt: String,
     pub anschrift: String,
+    /// Gebäude / Bauteil (z. B. „Halle 8“)
+    pub gebaeude: String,
     pub geschoss: String,
     pub auftraggeber: String,
     pub ersteller: String,
@@ -395,6 +419,7 @@ impl Default for PlanInfo {
         Self {
             objekt: "Name des Gebäudes".into(),
             anschrift: String::new(),
+            gebaeude: String::new(),
             geschoss: "Erdgeschoss".into(),
             auftraggeber: String::new(),
             ersteller: String::new(),

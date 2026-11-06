@@ -54,6 +54,7 @@ pub enum Tool {
     ScaleBar,
     Qr,
     Legend,
+    Block(BlockArt),
     FireCurve,
     MeasureM,
     MeasureMm,
@@ -82,7 +83,7 @@ impl Tool {
         match self {
             Select | Pan => Need::One,
             Text | Symbol(_) | Note | ScaleBar | Qr | RoomArea | FillPolygon(_) | InsertPoint | SegmentCut | Fillet | Table | Guide => Need::One,
-            Line | Rect | Container | Circle | Ellipse | NGon | Dimension | Window | Door | DoubleDoor | Stairs | Grid | FloorSection | Legend | MeasureM | MeasureMm | ScaleByDistance | ZoomBox | CutPlan => Need::Two,
+            Line | Rect | Container | Circle | Ellipse | NGon | Dimension | Window | Door | DoubleDoor | Stairs | Grid | FloorSection | Legend | Block(_) | MeasureM | MeasureMm | ScaleByDistance | ZoomBox | CutPlan => Need::Two,
             Arc | MeasureAngle | FireCurve => Need::Three,
             Polyline | Polygon | Hose | Spline | Wall | WallOrtho | Room | Area(_) | Route | RouteCurved | Laufweg | Cloud | Fence | Rail => Need::Multi,
         }
@@ -160,6 +161,7 @@ impl Tool {
             ScaleBar => "Maßstabsleiste".into(),
             Qr => "QR-Code".into(),
             Legend => "Legende".into(),
+            Block(a) => a.name().into(),
             FireCurve => "Kurve Feuerwehrzufahrt".into(),
             MeasureM => "Distanz [m]".into(),
             MeasureMm => "Distanz [mm]".into(),

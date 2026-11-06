@@ -145,6 +145,98 @@ fn white_box(out: &mut Prims, bb: BBox, line_w: f32) {
     frame_rect(out, bb.min, bb.max, line_w, farbe::SCHWARZ);
 }
 
+/// Verhaltensregeln (Brandfall, Unfälle) in ein Feld setzen; `u` ist die Grundeinheit (1 = A3).
+pub fn regeln_prims(out: &mut Prims, rb: BBox, u: f32) {
+    // Schrift verkleinern, wenn das Feld (z. B. bei A4 hoch) nicht für alle Regeln reicht
+    let zeilen = (REGELN_BRAND.len() + REGELN_UNFALL.len()) as f32;
+    let bedarf = (3.0 + 7.0 + 3.0 + 7.0 + 2.0) * u + zeilen * 3.2 * u * 1.5;
+    let k = (rb.h() / bedarf).min(1.0);
+    let u = u * k;
+    let s = 3.2 * u;
+    let mut y = rb.min.y + 3.0 * u;
+    let x = rb.min.x + 3.0 * u;
+    text(out, Pos::new(x, y), "Verhalten im Brandfall", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
+    y += 7.0 * u;
+    for r in REGELN_BRAND {
+        text(out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
+        y += s * 1.5;
+    }
+    y += 3.0 * u;
+    text(out, Pos::new(x, y), "Verhalten bei Unfällen", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
+    y += 7.0 * u;
+    for r in REGELN_UNFALL {
+        text(out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
+        y += s * 1.5;
+    }
+}
+
+/// Notruf-Balken.
+pub fn notruf_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, nb: BBox) {
+    let info = &doc.info;
+    fill_rect(out, nb.min, nb.max, farbe::ROT);
+    let ts = nb.h() * 0.42;
+    text(out, Pos::new(nb.center().x, nb.min.y + (nb.h() - ts) / 2.0), format!("Notruf: {}", info.notruf), ts, farbe::WEISS, TAlign::Mitte, true);
+}
+
+/// Sammelstelle mit Zeichen und Beschreibung.
+pub fn sammel_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, sb: BBox, u: f32) {
+    let info = &doc.info;
+    let s = (sb.h() * 0.6).min(16.0 * u);
+    out.push(Prim::Symbol { id: "E007".into(), c: Pos::new(sb.min.x + s * 0.5 + 3.0 * u, sb.center().y), size: s, rot: 0.0 });
+    let tx = sb.min.x + s + 7.0 * u;
+    text(out, Pos::new(tx, sb.min.y + 4.0 * u), "Sammelstelle", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
+    for (i, l) in info.sammelstelle.lines().enumerate() {
+        text(out, Pos::new(tx, sb.min.y + 11.0 * u + i as f32 * 4.5 * u), l, 3.5 * u, farbe::SCHWARZ, TAlign::Links, false);
+    }
+}
+
+/// Schriftfeld mit den Plandaten.
+pub fn schriftfeld_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, kb: BBox, u: f32) {
+    let info = &doc.info;
+    let s = (3.0 * u).min(kb.h() / 11.0);
+    let x = kb.min.x + 2.5 * u;
+    let mut y = kb.min.y + 2.0 * u;
+    text(out, Pos::new(x, y), info.objekt.clone(), s * 1.45, farbe::SCHWARZ, TAlign::Links, true);
+    y += s * 1.9;
+    for line_ in info.anschrift.lines().take(2) {
+        text(out, Pos::new(x, y), line_, s, farbe::SCHWARZ, TAlign::Links, false);
+        y += s * 1.3;
+    }
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    if doc.frame == FrameKind::Feuerwehrplan {
+        rows.push(("Planart:", info.planart.clone()));
+    }
+    if doc.frame == FrameKind::Laufkarte {
+        rows.push(("BMZ:", info.bmz_standort.clone()));
+    }
+    if !info.gebaeude.is_empty() {
+        rows.push(("Gebäude:", info.gebaeude.clone()));
+    }
+    rows.push(("Geschoss:", info.geschoss.clone()));
+    if !info.auftraggeber.is_empty() {
+        rows.push(("Auftraggeber:", info.auftraggeber.clone()));
+    }
+    rows.push(("Ersteller:", info.ersteller.clone()));
+    rows.push(("Stand:", info.stand.clone()));
+    if doc.frame != FrameKind::Feuerwehrplan {
+        rows.push(("Plan-Nr.:", info.plannummer.clone()));
+    }
+    if !info.revision.is_empty() {
+        rows.push(("Revision:", info.revision.clone()));
+    }
+    if !info.sonstiges.is_empty() {
+        rows.push(("", info.sonstiges.clone()));
+    }
+    rows.push(("Maßstab:", format!("1:{}", doc.scale_n)));
+    let avail = kb.max.y - y - 1.0 * u;
+    let lh = (avail / rows.len() as f32).min(s * 1.45);
+    for (k, v) in rows {
+        text(out, Pos::new(x, y), k, s, farbe::SCHWARZ, TAlign::Links, false);
+        text(out, Pos::new(x + 22.0 * u, y), v, s, farbe::SCHWARZ, TAlign::Links, false);
+        y += lh;
+    }
+}
+
 /// Feste Rahmenbestandteile. Der Planbereich bleibt frei.
 pub fn frame_prims(doc: &Doc) -> Prims<'_> {
     let mut out: Prims = Vec::new();
@@ -211,32 +303,10 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
 
     if let Some(rb) = l.rules {
         white_box(&mut out, rb, 0.4);
-        // Schrift verkleinern, wenn das Feld (z. B. bei A4 hoch) nicht für alle Regeln reicht
-        let zeilen = (REGELN_BRAND.len() + REGELN_UNFALL.len()) as f32;
-        let bedarf = (3.0 + 7.0 + 3.0 + 7.0 + 2.0) * u + zeilen * 3.2 * u * 1.5;
-        let k = (rb.h() / bedarf).min(1.0);
-        let u = u * k;
-        let s = 3.2 * u;
-        let mut y = rb.min.y + 3.0 * u;
-        let x = rb.min.x + 3.0 * u;
-        text(&mut out, Pos::new(x, y), "Verhalten im Brandfall", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
-        y += 7.0 * u;
-        for r in REGELN_BRAND {
-            text(&mut out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
-            y += s * 1.5;
-        }
-        y += 3.0 * u;
-        text(&mut out, Pos::new(x, y), "Verhalten bei Unfällen", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
-        y += 7.0 * u;
-        for r in REGELN_UNFALL {
-            text(&mut out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
-            y += s * 1.5;
-        }
+        regeln_prims(&mut out, rb, u);
     }
     if let Some(nb) = l.notruf {
-        fill_rect(&mut out, nb.min, nb.max, farbe::ROT);
-        let ts = nb.h() * 0.42;
-        text(&mut out, Pos::new(nb.center().x, nb.min.y + (nb.h() - ts) / 2.0), format!("Notruf: {}", info.notruf), ts, farbe::WEISS, TAlign::Mitte, true);
+        notruf_prims(&mut out, doc, nb);
     }
     if let Some(lb) = l.legend {
         white_box(&mut out, lb, 0.4);
@@ -245,13 +315,7 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
     }
     if let Some(sb) = l.sammel {
         white_box(&mut out, sb, 0.4);
-        let s = (sb.h() * 0.6).min(16.0 * u);
-        out.push(Prim::Symbol { id: "E007".into(), c: Pos::new(sb.min.x + s * 0.5 + 3.0 * u, sb.center().y), size: s, rot: 0.0 });
-        let tx = sb.min.x + s + 7.0 * u;
-        text(&mut out, Pos::new(tx, sb.min.y + 4.0 * u), "Sammelstelle", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
-        for (i, l) in info.sammelstelle.lines().enumerate() {
-            text(&mut out, Pos::new(tx, sb.min.y + 11.0 * u + i as f32 * 4.5 * u), l, 3.5 * u, farbe::SCHWARZ, TAlign::Links, false);
-        }
+        sammel_prims(&mut out, doc, sb, u);
     }
     if let Some(nb) = l.nummer {
         white_box(&mut out, nb, 0.5);
@@ -274,45 +338,7 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
     }
     if let Some(kb) = l.kopf {
         white_box(&mut out, kb, 0.4);
-        let s = (3.0 * u).min(kb.h() / 11.0);
-        let x = kb.min.x + 2.5 * u;
-        let mut y = kb.min.y + 2.0 * u;
-        text(&mut out, Pos::new(x, y), info.objekt.clone(), s * 1.45, farbe::SCHWARZ, TAlign::Links, true);
-        y += s * 1.9;
-        for line_ in info.anschrift.lines().take(2) {
-            text(&mut out, Pos::new(x, y), line_, s, farbe::SCHWARZ, TAlign::Links, false);
-            y += s * 1.3;
-        }
-        let mut rows: Vec<(&str, String)> = Vec::new();
-        if doc.frame == FrameKind::Feuerwehrplan {
-            rows.push(("Planart:", info.planart.clone()));
-        }
-        if doc.frame == FrameKind::Laufkarte {
-            rows.push(("BMZ:", info.bmz_standort.clone()));
-        }
-        rows.push(("Geschoss:", info.geschoss.clone()));
-        if !info.auftraggeber.is_empty() {
-            rows.push(("Auftraggeber:", info.auftraggeber.clone()));
-        }
-        rows.push(("Ersteller:", info.ersteller.clone()));
-        rows.push(("Stand:", info.stand.clone()));
-        if doc.frame != FrameKind::Feuerwehrplan {
-            rows.push(("Plan-Nr.:", info.plannummer.clone()));
-        }
-        if !info.revision.is_empty() {
-            rows.push(("Revision:", info.revision.clone()));
-        }
-        if !info.sonstiges.is_empty() {
-            rows.push(("", info.sonstiges.clone()));
-        }
-        rows.push(("Maßstab:", format!("1:{}", doc.scale_n)));
-        let avail = kb.max.y - y - 1.0 * u;
-        let lh = (avail / rows.len() as f32).min(s * 1.45);
-        for (k, v) in rows {
-            text(&mut out, Pos::new(x, y), k, s, farbe::SCHWARZ, TAlign::Links, false);
-            text(&mut out, Pos::new(x + 22.0 * u, y), v, s, farbe::SCHWARZ, TAlign::Links, false);
-            y += lh;
-        }
+        schriftfeld_prims(&mut out, doc, kb, u);
     }
     if doc.frame == FrameKind::Feuerwehrplan || doc.frame == FrameKind::Laufkarte {
         frame_rect(&mut out, p.min, p.max, 0.5, farbe::SCHWARZ);

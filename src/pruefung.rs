@@ -69,14 +69,19 @@ pub fn pruefen(doc: &Doc) -> Vec<Befund> {
     if fr {
         check(&mut out, w.min(h) >= 296.0, Stufe::Hinweis, "Format mindestens DIN A3.", "Format kleiner als DIN A3 – nur für einzelne Räume zulässig.");
         check(&mut out, has(&["STANDORT", "STANDORT_PFEIL"]), Stufe::Fehler, "Standort („Sie sind hier“) eingezeichnet.", "Standort-Symbol fehlt.");
-        check(&mut out, kinds.iter().any(|k| matches!(k, ObjKind::Route { .. })), Stufe::Fehler, "Fluchtwege eingezeichnet.", "Keine Fluchtwege eingezeichnet.");
+        // Fluchtwege als Linie oder als Rettungswegfläche (z. B. aus importierten Plänen)
+        let flaeche = crate::ops::used_legend_keys(doc).iter().any(|(k, _)| k == "area:fluchtbereich");
+        check(&mut out, flaeche || kinds.iter().any(|k| matches!(k, ObjKind::Route { .. })), Stufe::Fehler, "Fluchtwege eingezeichnet.", "Keine Fluchtwege eingezeichnet.");
         check(&mut out, has(&["E001", "E002"]), Stufe::Fehler, "Notausgang gekennzeichnet.", "Kein Notausgang-Zeichen im Plan.");
-        let sammel = has(&["E007", "E_SAMMEL_TEXT"]) || (layout.sammel.is_some() && !doc.info.sammelstelle.trim().is_empty());
+        let baustein = |art: BlockArt| kinds.iter().any(|k| matches!(k, ObjKind::Block { art: a, .. } if *a == art));
+        let sammel = has(&["E007", "E_SAMMEL_TEXT"]) || ((layout.sammel.is_some() || baustein(BlockArt::Sammelstelle)) && !doc.info.sammelstelle.trim().is_empty());
         check(&mut out, sammel, Stufe::Fehler, "Sammelstelle angegeben.", "Sammelstelle fehlt (Symbol oder Feld „Sammelstelle“ ausfüllen).");
         check(&mut out, has(&["F001"]), Stufe::Hinweis, "Feuerlöscher eingezeichnet.", "Keine Feuerlöscher eingezeichnet.");
         check(&mut out, has(&["E003"]), Stufe::Hinweis, "Erste Hilfe eingezeichnet.", "Keine Erste-Hilfe-Einrichtung eingezeichnet.");
         check(&mut out, legend, Stufe::Fehler, "Legende vorhanden.", "Legende fehlt.");
-        check(&mut out, layout.rules.is_some(), Stufe::Hinweis, "Verhaltensregeln vorhanden.", "Verhaltensregeln im Brandfall/bei Unfällen fehlen (Rahmen „vollständig“ wählen).");
+        // Verhaltensregeln: im Rahmen, als Baustein oder als übernommene Zeichnung (Überschrift als Text)
+        let regeln_text = doc.objects.iter().any(|o| crate::ops::texte_enthalten(&o.kind, "verhalten im brandfall"));
+        check(&mut out, layout.rules.is_some() || baustein(BlockArt::Regeln) || regeln_text, Stufe::Hinweis, "Verhaltensregeln vorhanden.", "Verhaltensregeln im Brandfall/bei Unfällen fehlen (Rahmen „vollständig“ wählen).");
         out.push((Stufe::Hinweis, "Nicht automatisch prüfbar: lagerichtige Ausrichtung zum Aushangort, Aushanghöhe, Aktualität.".into()));
     }
     if fw {
