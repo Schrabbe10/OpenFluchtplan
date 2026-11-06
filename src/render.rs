@@ -432,6 +432,7 @@ pub fn obj_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, o: &'a Obj, printing: bo
         }
         ObjKind::Text { pos, text: t, size, bold, italic, align, rot } => {
             let c = st.stroke.map(|s| s.color).unwrap_or(farbe::SCHWARZ);
+            let t = ops::platzhalter(doc, t);
             for (i, l) in t.lines().enumerate() {
                 let p = *pos + Pos::new(0.0, i as f32 * size * 1.25).rotate(*rot);
                 out.push(Prim::Text { pos: p, text: l.to_string(), size: *size, color: c, align: *align, bold: *bold, italic: *italic, rot: *rot });
@@ -522,7 +523,26 @@ pub fn obj_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, o: &'a Obj, printing: bo
             if let Some(s) = st.stroke {
                 frame_rect(out, *a, *b, s.width, s.color);
             }
-            legend_prims(out, doc, *a, *b, *cols, *size, true);
+            // passen nicht mehr alle Einträge hinein (Symbol ergänzt), Spalten/Schrift anpassen
+            let (c, s) = legend_fit(doc, BBox::from_two(*a, *b), *size / 3.4);
+            let (c, s) = if s < *size || c > *cols { (c, s) } else { (*cols, *size) };
+            legend_prims(out, doc, *a, *b, c, s, true);
+        }
+        ObjKind::Block { a, b, art } => {
+            let bb = BBox::from_two(*a, *b);
+            if let Fill::Farbe(f) = st.fill {
+                fill_rect(out, *a, *b, f);
+            }
+            if let Some(s) = st.stroke {
+                frame_rect(out, *a, *b, s.width, s.color);
+            }
+            // Grundeinheit aus der Feldgröße (die Rahmenvorlage rechnet in A3-Einheiten)
+            match art {
+                BlockArt::Regeln => crate::templates::regeln_prims(out, bb, (bb.w() / 85.0).clamp(0.3, 3.0)),
+                BlockArt::Schriftfeld => crate::templates::schriftfeld_prims(out, doc, bb, (bb.w() / 85.0).clamp(0.3, 3.0)),
+                BlockArt::Notruf => crate::templates::notruf_prims(out, doc, bb),
+                BlockArt::Sammelstelle => crate::templates::sammel_prims(out, doc, bb, (bb.h() / 25.0).clamp(0.3, 3.0)),
+            }
         }
         ObjKind::Grid { a, b, nx, ny } => grid_prims(out, *a, *b, *nx, *ny, col),
         ObjKind::FloorSection { a, b, floors, current } => floor_section_prims(out, *a, *b, floors, *current),

@@ -44,7 +44,7 @@ impl App {
             ObjKind::Area { .. } => "Flächen",
             ObjKind::Route { .. } => "Fluchtwege",
             ObjKind::Symbol { .. } => "Symbole",
-            ObjKind::Text { .. } | ObjKind::Dimension { .. } | ObjKind::Note { .. } | ObjKind::Table { .. } | ObjKind::Room { .. } | ObjKind::Legend { .. } => "Beschriftung",
+            ObjKind::Text { .. } | ObjKind::Dimension { .. } | ObjKind::Note { .. } | ObjKind::Table { .. } | ObjKind::Room { .. } | ObjKind::Legend { .. } | ObjKind::Block { .. } => "Beschriftung",
             _ => return doc.active_layer,
         };
         doc.find_layer_by_name(name)
@@ -104,6 +104,11 @@ impl App {
                     .position(|f| f.to_lowercase() == g || (g.starts_with("erd") && f == "EG") || (g.starts_with("keller") && f == "KG"))
                     .unwrap_or(2);
                 (ObjKind::FloorSection { a: b.min, b: b.max, floors, current }, Style::default())
+            }
+            Tool::Block(art) => {
+                let b = BBox::from_two(p0, p1?);
+                let fill = if *art == BlockArt::Notruf { Fill::Keine } else { Fill::Farbe(farbe::WEISS) };
+                (ObjKind::Block { a: b.min, b: b.max, art: *art }, Style { stroke: (*art != BlockArt::Notruf).then(|| StrokeStyle::new(farbe::SCHWARZ, 0.4)), fill })
             }
             Tool::Legend => {
                 let b = BBox::from_two(p0, p1?);

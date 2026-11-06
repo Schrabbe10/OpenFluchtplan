@@ -793,9 +793,94 @@ fn build() -> Vec<SymbolDef> {
     v
 }
 
+
+/// Gemeinfreie ISO-7010-Grafiken (Wikimedia Commons, siehe assets/iso7010/QUELLEN.md); sie ersetzen
+/// unsere eigenen Zeichnungen der gleichnamigen Zeichen.
+const ISO7010: &[(&str, &str)] = &[
+    ("E001", include_str!("../assets/iso7010/E001.svg")),
+    ("E002", include_str!("../assets/iso7010/E002.svg")),
+    ("E003", include_str!("../assets/iso7010/E003.svg")),
+    ("E004", include_str!("../assets/iso7010/E004.svg")),
+    ("E007", include_str!("../assets/iso7010/E007.svg")),
+    ("E008", include_str!("../assets/iso7010/E008.svg")),
+    ("E009", include_str!("../assets/iso7010/E009.svg")),
+    ("E010", include_str!("../assets/iso7010/E010.svg")),
+    ("E011", include_str!("../assets/iso7010/E011.svg")),
+    ("E012", include_str!("../assets/iso7010/E012.svg")),
+    ("E013", include_str!("../assets/iso7010/E013.svg")),
+    ("E016", include_str!("../assets/iso7010/E016.svg")),
+    ("E017", include_str!("../assets/iso7010/E017.svg")),
+    ("F001", include_str!("../assets/iso7010/F001.svg")),
+    ("F002", include_str!("../assets/iso7010/F002.svg")),
+    ("F003", include_str!("../assets/iso7010/F003.svg")),
+    ("F004", include_str!("../assets/iso7010/F004.svg")),
+    ("F005", include_str!("../assets/iso7010/F005.svg")),
+    ("F006", include_str!("../assets/iso7010/F006.svg")),
+    ("M001", include_str!("../assets/iso7010/M001.svg")),
+    ("M002", include_str!("../assets/iso7010/M002.svg")),
+    ("M003", include_str!("../assets/iso7010/M003.svg")),
+    ("M004", include_str!("../assets/iso7010/M004.svg")),
+    ("M008", include_str!("../assets/iso7010/M008.svg")),
+    ("M009", include_str!("../assets/iso7010/M009.svg")),
+    ("M010", include_str!("../assets/iso7010/M010.svg")),
+    ("M014", include_str!("../assets/iso7010/M014.svg")),
+    ("M015", include_str!("../assets/iso7010/M015.svg")),
+    ("M017", include_str!("../assets/iso7010/M017.svg")),
+    ("P001", include_str!("../assets/iso7010/P001.svg")),
+    ("P002", include_str!("../assets/iso7010/P002.svg")),
+    ("P003", include_str!("../assets/iso7010/P003.svg")),
+    ("P004", include_str!("../assets/iso7010/P004.svg")),
+    ("P005", include_str!("../assets/iso7010/P005.svg")),
+    ("P006", include_str!("../assets/iso7010/P006.svg")),
+    ("P010", include_str!("../assets/iso7010/P010.svg")),
+    ("P011", include_str!("../assets/iso7010/P011.svg")),
+    ("P013", include_str!("../assets/iso7010/P013.svg")),
+    ("P020", include_str!("../assets/iso7010/P020.svg")),
+    ("P023", include_str!("../assets/iso7010/P023.svg")),
+    ("W001", include_str!("../assets/iso7010/W001.svg")),
+    ("W002", include_str!("../assets/iso7010/W002.svg")),
+    ("W003", include_str!("../assets/iso7010/W003.svg")),
+    ("W004", include_str!("../assets/iso7010/W004.svg")),
+    ("W006", include_str!("../assets/iso7010/W006.svg")),
+    ("W009", include_str!("../assets/iso7010/W009.svg")),
+    ("W011", include_str!("../assets/iso7010/W011.svg")),
+    ("W012", include_str!("../assets/iso7010/W012.svg")),
+    ("W014", include_str!("../assets/iso7010/W014.svg")),
+    ("W016", include_str!("../assets/iso7010/W016.svg")),
+    ("W017", include_str!("../assets/iso7010/W017.svg")),
+    ("W021", include_str!("../assets/iso7010/W021.svg")),
+    ("W023", include_str!("../assets/iso7010/W023.svg")),
+    ("W026", include_str!("../assets/iso7010/W026.svg")),
+    ("W029", include_str!("../assets/iso7010/W029.svg")),
+];
+
+/// Fremdes SVG als Zeichen im Raster 0…100 einsetzen; IDs bekommen das Zeichen als Präfix,
+/// damit sich Verweise verschiedener Zeichen in einem Plan nicht stören.
+fn iso_svg(id: &str, src: &str) -> String {
+    let start = src.find("<svg").unwrap_or(0);
+    let ende = src[start..].find('>').map(|e| start + e).unwrap_or(start);
+    let kopf = &src[start..=ende];
+    let zahl = |name: &str| {
+        kopf.split(&format!(" {name}=\"")).nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse::<f32>().ok()).unwrap_or(100.0)
+    };
+    let viewbox = kopf.split(" viewBox=\"").nth(1).and_then(|r| r.split('"').next()).map(|v| v.to_string()).unwrap_or_else(|| format!("0 0 {} {}", zahl("width"), zahl("height")));
+    let rumpf = src[ende + 1..].rsplit_once("</svg>").map(|r| r.0).unwrap_or("");
+    let p = format!("iso{id}_");
+    let rumpf = rumpf.replace("id=\"", &format!("id=\"{p}")).replace("url(#", &format!("url(#{p}")).replace("href=\"#", &format!("href=\"#{p}"));
+    format!("<svg x='0' y='0' width='100' height='100' viewBox='{viewbox}' preserveAspectRatio='xMidYMid meet'>{rumpf}</svg>")
+}
+
 pub fn library() -> &'static [SymbolDef] {
     static LIB: OnceLock<Vec<SymbolDef>> = OnceLock::new();
-    LIB.get_or_init(build)
+    LIB.get_or_init(|| {
+        let mut v = build();
+        for s in v.iter_mut() {
+            if let Some((_, src)) = ISO7010.iter().find(|(id, _)| *id == s.id) {
+                s.svg = iso_svg(s.id, src);
+            }
+        }
+        v
+    })
 }
 
 pub fn find(id: &str) -> Option<&'static SymbolDef> {
@@ -854,5 +939,30 @@ mod sichtpruefung {
             resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pm.as_mut());
             pm.save_png(std::path::Path::new(&dir).join("symbole_gross.png")).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod iso_einlesen {
+    /// ISO-7010-Grafiken (Wikimedia Commons) bereinigt nach assets/iso7010 übernehmen:
+    /// FLUCHTPLAN_NORMORDNER=Ordner mit E001.svg … cargo test iso_grafiken_einlesen -- --ignored
+    #[test]
+    #[ignore]
+    fn iso_grafiken_einlesen() {
+        let Ok(ordner) = std::env::var("FLUCHTPLAN_NORMORDNER") else { return };
+        let ziel = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/iso7010");
+        std::fs::create_dir_all(ziel).unwrap();
+        let mut n = 0;
+        for e in std::fs::read_dir(&ordner).unwrap().flatten() {
+            let p = e.path();
+            if p.extension().is_none_or(|x| x != "svg") {
+                continue;
+            }
+            let t = resvg::usvg::Tree::from_str(&std::fs::read_to_string(&p).unwrap(), crate::export::usvg_options()).unwrap();
+            let opt = resvg::usvg::WriteOptions { indent: resvg::usvg::Indent::None, attributes_indent: resvg::usvg::Indent::None, coordinates_precision: 2, transforms_precision: 4, ..Default::default() };
+            std::fs::write(format!("{ziel}/{}", p.file_name().unwrap().to_string_lossy()), t.to_string(&opt)).unwrap();
+            n += 1;
+        }
+        eprintln!("{n} Grafiken übernommen");
     }
 }

@@ -24,6 +24,7 @@ pub fn bounds(o: &ObjKind) -> BBox {
         | ObjKind::Image { a, b, .. }
         | ObjKind::Window { a, b, .. }
         | ObjKind::Legend { a, b, .. }
+        | ObjKind::Block { a, b, .. }
         | ObjKind::Grid { a, b, .. }
         | ObjKind::FloorSection { a, b, .. } => BBox::from_two(*a, *b),
         ObjKind::Polyline { pts, .. }
@@ -261,6 +262,7 @@ fn map_points(o: &mut ObjKind, f: &impl Fn(Pos) -> Pos) {
         | ObjKind::Image { a, b, .. }
         | ObjKind::Window { a, b, .. }
         | ObjKind::Legend { a, b, .. }
+        | ObjKind::Block { a, b, .. }
         | ObjKind::Grid { a, b, .. }
         | ObjKind::FloorSection { a, b, .. }
         | ObjKind::Dimension { a, b, .. }
@@ -396,6 +398,7 @@ pub fn handles(o: &ObjKind) -> Vec<Pos> {
         | ObjKind::Image { a, b, .. }
         | ObjKind::Window { a, b, .. }
         | ObjKind::Legend { a, b, .. }
+        | ObjKind::Block { a, b, .. }
         | ObjKind::Grid { a, b, .. }
         | ObjKind::FloorSection { a, b, .. }
         | ObjKind::Stairs { a, b, .. } => vec![*a, *b],
@@ -434,6 +437,7 @@ pub fn set_handle(o: &mut ObjKind, i: usize, p: Pos) {
         | ObjKind::Image { a, b, .. }
         | ObjKind::Window { a, b, .. }
         | ObjKind::Legend { a, b, .. }
+        | ObjKind::Block { a, b, .. }
         | ObjKind::Grid { a, b, .. }
         | ObjKind::FloorSection { a, b, .. }
         | ObjKind::Stairs { a, b, .. } => {
@@ -543,6 +547,12 @@ pub fn insert_point(o: &mut ObjKind, p: Pos) -> bool {
 }
 
 /// Schlüssel und Standardtext für die Legende.
+/// Helles Grün wie bei Rettungswegflächen (nicht das dunkle Grün der Rettungszeichen).
+fn hellgruen(c: Color) -> bool {
+    let (r, g, b) = (c.0 as i32, c.1 as i32, c.2 as i32);
+    g >= 170 && r >= 120 && g - r >= 15 && g - b >= 15
+}
+
 pub fn legend_key(doc: &Doc, o: &ObjKind, style: &Style) -> Option<(String, String)> {
     match o {
         ObjKind::Symbol { id, .. } => {
@@ -552,6 +562,14 @@ pub fn legend_key(doc: &Doc, o: &ObjKind, style: &Style) -> Option<(String, Stri
             Some((format!("sym:{id}"), name))
         }
         ObjKind::Area { preset, .. } => presets::find(preset).map(|p| (format!("area:{}", p.key), p.name.to_string())),
+        // hellgrüne Flächen (z. B. aus importierten Plänen) sind Rettungswegflächen
+        ObjKind::Polyline { closed: true, .. } | ObjKind::Path { closed: true, .. } if matches!(style.fill, Fill::Farbe(c) if hellgruen(c)) && {
+            let b = bounds_doc(doc, o);
+            b.w().max(b.h()) >= 20.0
+        } =>
+        {
+            presets::find("fluchtbereich").map(|p| (format!("area:{}", p.key), p.name.to_string()))
+        }
         ObjKind::Route { .. } => {
             let c = style.stroke.map(|s| s.color).unwrap_or(farbe::FLUCHT_HELL);
             if c == farbe::FLUCHT_HELL {
@@ -596,6 +614,51 @@ pub fn sync_legend(doc: &mut Doc) {
     }
 }
 
+/// Platzhalter in Texten durch die Plandaten ersetzen: {objekt}, {anschrift}, {gebaeude}, {geschoss},
+/// {stand}, {plannummer}, {ersteller}, {revision}, {notruf}, {sammelstelle}, {massstab}.
+pub const PLATZHALTER: [&str; 11] = ["objekt", "anschrift", "gebaeude", "geschoss", "stand", "plannummer", "ersteller", "revision", "notruf", "sammelstelle", "massstab"];
+
+pub fn platzhalter_wert(doc: &Doc, name: &str) -> Option<String> {
+    let i = &doc.info;
+    Some(match name {
+        "objekt" => i.objekt.clone(),
+        "anschrift" => i.anschrift.clone(),
+        "gebaeude" => i.gebaeude.clone(),
+        "geschoss" => i.geschoss.clone(),
+        "stand" => i.stand.clone(),
+        "plannummer" => i.plannummer.clone(),
+        "ersteller" => i.ersteller.clone(),
+        "revision" => i.revision.clone(),
+        "notruf" => i.notruf.clone(),
+        "sammelstelle" => i.sammelstelle.clone(),
+        "massstab" => format!("1:{}", doc.scale_n),
+        _ => return None,
+    })
+}
+
+pub fn platzhalter<'a>(doc: &Doc, t: &'a str) -> std::borrow::Cow<'a, str> {
+    if !t.contains('{') {
+        return std::borrow::Cow::Borrowed(t);
+    }
+    let mut s = t.to_string();
+    for name in PLATZHALTER {
+        let k = format!("{{{name}}}");
+        if s.contains(&k) {
+            s = s.replace(&k, &platzhalter_wert(doc, name).unwrap_or_default());
+        }
+    }
+    std::borrow::Cow::Owned(s)
+}
+
+/// Enthält das Objekt (auch in Gruppen) einen Text mit diesem Inhalt (ohne Groß-/Kleinschreibung)?
+pub fn texte_enthalten(o: &ObjKind, suche: &str) -> bool {
+    match o {
+        ObjKind::Text { text, .. } => text.to_lowercase().contains(suche),
+        ObjKind::Group { children } => children.iter().any(|c| texte_enthalten(&c.kind, suche)),
+        _ => false,
+    }
+}
+
 pub fn kind_name(o: &ObjKind) -> &'static str {
     match o {
         ObjKind::Line { .. } => "Linie",
@@ -623,6 +686,7 @@ pub fn kind_name(o: &ObjKind) -> &'static str {
         ObjKind::Route { .. } => "Fluchtweg",
         ObjKind::Symbol { .. } => "Symbol",
         ObjKind::Legend { .. } => "Legende",
+        ObjKind::Block { art, .. } => art.name(),
         ObjKind::Grid { .. } => "Planraster",
         ObjKind::FloorSection { .. } => "Geschoss-Schnitt",
         ObjKind::RevisionCloud { .. } => "Revisionswolke",

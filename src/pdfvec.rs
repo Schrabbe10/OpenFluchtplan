@@ -537,6 +537,12 @@ pub fn place(doc: &mut Doc, pg: PdfPage, opt: PdfImportOpt) -> Vec<u64> {
             // erkannte Zeichen durch die Normzeichen der Bibliothek ersetzen (Legende, Prüfung)
             let neu: Vec<u64> = doc.objects[start..].iter().map(|o| o.id).collect();
             crate::erkennung::normzeichen_einsetzen(doc, Some(&neu));
+            // gezeichnete Legende durch eine echte ersetzen, die sich mit dem Plan aktualisiert
+            let neu: Vec<u64> = doc.objects[start..].iter().map(|o| o.id).collect();
+            crate::erkennung::legende_ersetzen(doc, &neu);
+            // Schriftfeld-Angaben übernehmen, Planbereiche als Gruppen auf eigene Ebenen
+            let neu: Vec<u64> = doc.objects[start..].iter().map(|o| o.id).collect();
+            crate::erkennung::bereiche_aufbereiten(doc, &neu);
             return doc.objects[start..].iter().map(|o| o.id).collect();
         }
         ids

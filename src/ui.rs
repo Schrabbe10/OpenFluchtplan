@@ -653,6 +653,16 @@ impl App {
         });
         group(ui, "Planelemente", |ui| {
             self.tool_rb(ui, "legende", "Legende", Tool::Legend, "Legende als Rahmen aufziehen (wird automatisch befüllt)", 2);
+            ui.vertical(|ui| {
+                for (art, tip) in [
+                    (BlockArt::Regeln, "Verhalten im Brandfall / bei Unfällen als Rahmen aufziehen"),
+                    (BlockArt::Schriftfeld, "Schriftfeld (Objekt, Gebäude, Geschoss, Stand, Plan-Nr. aus den Plandaten) aufziehen"),
+                    (BlockArt::Notruf, "Notruf-Balken aufziehen (Nummer aus den Plandaten)"),
+                    (BlockArt::Sammelstelle, "Sammelstelle mit Beschreibung aus den Plandaten aufziehen"),
+                ] {
+                    self.tool_rb(ui, "legende", art.name(), Tool::Block(art), tip, 1);
+                }
+            });
             col(ui, |ui| {
                 if self.small(ui, "legende", "Legende …", Opt::default(), "Legenden-Assistent").clicked() {
                     self.dlg.legend = true;
@@ -712,6 +722,13 @@ impl App {
                     }
                 });
                 self.tool_rb(ui, "plan_schneiden", "Plan schneiden", Tool::CutPlan, "Alles außerhalb eines Rechtecks entfernen", 1);
+                if self.small(ui, "plan_schneiden", "Nur Grundriss", Opt::default(), "Zeichen, Legende, Rettungswegflächen, Kopfzeile, Verhaltensregeln, Übersichtsplan und Schriftfeld entfernen – nur der Gebäudegrundriss bleibt (Rückgängig möglich)").clicked() {
+                    let t = self.tab_mut();
+                    t.push_undo();
+                    let n = crate::erkennung::nur_grundriss(&mut t.doc);
+                    t.sel.clear();
+                    self.status = format!("Nur Grundriss: {n} Objekte entfernt (Strg+Z macht es rückgängig).");
+                }
                 self.tool_rb(ui, "punkt", "Punkt einfügen", Tool::InsertPoint, "Punkt in Linienzug/Wand einfügen", 1);
             });
             col(ui, |ui| {
@@ -1069,6 +1086,7 @@ impl App {
             ui.label("Anschrift");
             ui.add(egui::TextEdit::multiline(&mut info.anschrift).desired_rows(2).desired_width(170.0));
             ui.end_row();
+            row(ui, "Gebäude", &mut info.gebaeude);
             row(ui, "Geschoss", &mut info.geschoss);
             if frame == FrameKind::Feuerwehrplan {
                 row(ui, "Planart", &mut info.planart);

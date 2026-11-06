@@ -321,6 +321,8 @@ const BEGRIFFE: &[(&str, &[&str])] = &[
     ("brandmeldetelefon", &["F006"]),
     ("löschdecke", &["F_LOESCHDECKE"]),
     ("brandwand", &["FW_BRANDWAND"]),
+    ("anleiter", &["FW_ANLEITER"]),
+    ("feuerleiter", &["F003"]),
 ];
 
 fn begriff_norm(s: &str) -> String {
@@ -412,7 +414,10 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
             wahl.retain(|(id, d)| !id.starts_with("PFEIL_") || *d < 0.18);
         }
         let Some((id, d)) = wahl.into_iter().min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
-        if d > 0.3 {
+        // Feuerwehrzeichen (DIN 14034) werden sehr unterschiedlich gezeichnet; steht nur eines zur
+        // Wahl, belegt der Legendentext die Zuordnung (z. B. Anleiterstelle als Leiter statt Balken)
+        let feuerwehr = ids.len() == 1 && symbols::find(id).is_some_and(|s| s.cat == symbols::Category::Feuerwehr);
+        if d > if feuerwehr { 0.45 } else { 0.3 } {
             continue;
         }
         // Zeichen kommen gedreht vor (Richtungspfeile, Brandwand an waagerechter Wand …),
@@ -825,6 +830,20 @@ mod alle_plaene {
                 }
             }
             eprintln!("PLAN {} ({:.1} s): {:?}", p.file_name().unwrap().to_string_lossy(), t.elapsed().as_secs_f32(), zahl);
+            let legende: Vec<String> = doc.objects.iter().filter_map(|o| match &o.kind {
+                ObjKind::Legend { a, b, cols, size } => Some(format!("({:.0},{:.0})-({:.0},{:.0}) {cols} Sp. {size:.1} mm", a.x, a.y, b.x, b.y)),
+                _ => None,
+            }).collect();
+            eprintln!("  LEGENDE {:?} Einträge {:?}", legende, doc.legend.entries.iter().map(|e| e.label.as_str()).collect::<Vec<_>>());
+            let gruppen: Vec<String> = doc.objects.iter().filter(|o| matches!(o.kind, ObjKind::Group { .. })).filter_map(|o| doc.layers.iter().find(|l| l.id == o.layer).filter(|l| BEREICH_EBENEN.contains(&l.name.as_str())).map(|l| { let b = ops::bounds_doc(&doc, &o.kind); format!("{} ({:.0},{:.0} {:.0}×{:.0})", l.name, b.min.x, b.min.y, b.w(), b.h()) })).collect();
+            let i = &doc.info;
+            eprintln!("  BEREICHE {gruppen:?}\n  INFO objekt={:?} gebaeude={:?} geschoss={:?} stand={:?} plannr={:?}", i.objekt, i.gebaeude, i.geschoss, i.stand, i.plannummer);
+            if std::env::var("FLUCHTPLAN_DPI").is_ok() {
+                let mut g = doc.clone();
+                let n = nur_grundriss(&mut g);
+                eprintln!("  NUR_GRUNDRISS {n} entfernt");
+                std::fs::write(format!("{dir}/grundriss_{k}.png"), crate::export::render_png(&g, 50.0).unwrap()).unwrap();
+            }
             // Ausschnitte: verdächtige Treffer und übrig gebliebene farbige Schilder
             let seite = crate::import::pdf_page_image_bytes(std::fs::read(p).unwrap(), 0, 200.0).unwrap();
             let roh = { use base64::Engine; base64::engine::general_purpose::STANDARD.decode(&seite.b64).unwrap() };
@@ -866,9 +885,766 @@ mod alle_plaene {
                 }
                 bogen.save(format!("{dir}/stellen_{k}.png")).unwrap();
             }
-            if std::env::var("FLUCHTPLAN_DPI").is_ok() && k % 6 == 0 {
+            if std::env::var("FLUCHTPLAN_DPI").is_ok() {
                 std::fs::write(format!("{dir}/plan_{k}.png"), crate::export::render_png(&doc, std::env::var("FLUCHTPLAN_DPI").ok().and_then(|d| d.parse().ok()).unwrap_or(60.0)).unwrap()).unwrap();
             }
         }
+    }
+}
+
+/// Gezeichnete Legende eines importierten Plans durch eine echte Legende ersetzen, die sich mit dem
+/// Plan aktualisiert. Erkannt wird sie an Normzeichen mit kurzer Beschriftung rechts daneben, die dicht
+/// beieinander stehen; ein umgebender Rahmen samt Überschrift wird mit ersetzt. Liefert den Bereich.
+pub fn legende_ersetzen(doc: &mut Doc, ids: &[u64]) -> Option<BBox> {
+    fn texte_sammeln(doc: &Doc, o: &Obj, out: &mut Vec<(BBox, String)>) {
+        match &o.kind {
+            ObjKind::Text { text, .. } if !text.trim().is_empty() => out.push((ops::bounds_doc(doc, &o.kind), text.clone())),
+            ObjKind::Group { children } => children.iter().for_each(|c| texte_sammeln(doc, c, out)),
+            _ => {}
+        }
+    }
+    let neu = |o: &Obj| ids.contains(&o.id) && !o.locked;
+    let mut texte = Vec::new();
+    for o in doc.objects.iter().filter(|o| neu(o)) {
+        texte_sammeln(doc, o, &mut texte);
+    }
+    // Einträge: eingesetztes Normzeichen + passender Text rechts daneben (Texte merken)
+    let mut eintraege: Vec<(BBox, Vec<usize>)> = Vec::new();
+    for o in doc.objects.iter().filter(|o| neu(o)) {
+        let ObjKind::Symbol { id: sym_id, .. } = &o.kind else { continue };
+        let b = ops::bounds_doc(doc, &o.kind);
+        let h = b.w().max(b.h());
+        let neben: Vec<usize> = (0..texte.len())
+            .filter(|&i| {
+                let t = texte[i].0;
+                t.min.x >= b.max.x - 0.5 && t.min.x <= b.max.x + 2.5 * h && t.center().y >= b.min.y - 0.25 * h && t.center().y <= b.max.y + 0.25 * h
+            })
+            .collect();
+        let text: String = neben.iter().map(|&i| texte[i].1.as_str()).collect::<Vec<_>>().join(" ");
+        // der Text muss das Zeichen beschreiben (nicht nur irgendein Begriff daneben)
+        if neben.is_empty() || begriff_norm(&text).chars().count() > 50 || !ids_fuer_text(&text).contains(&sym_id.as_str()) {
+            continue;
+        }
+        eintraege.push((neben.iter().fold(b, |acc, &i| acc.union(texte[i].0)), neben));
+    }
+    if eintraege.len() < 3 {
+        return None;
+    }
+    let ist_titel = |s: &str| begriff_norm(s).starts_with("legende");
+    // Bewertung eines Bereichs: enthaltene Einträge und fremde Texte (Verhaltensregeln o. Ä.)
+    let bewerten = |r: &BBox| {
+        let innen: Vec<usize> = (0..eintraege.len()).filter(|&i| eintraege[i].0.inside(&r.expand(0.5))).collect();
+        let eigen: Vec<usize> = innen.iter().flat_map(|&i| eintraege[i].1.iter().copied()).collect();
+        let fremd = (0..texte.len()).filter(|&i| r.contains(texte[i].0.center()) && !eigen.contains(&i) && !ist_titel(&texte[i].1)).count();
+        (innen.len(), fremd)
+    };
+    let legende_artig = |(n, fremd): (usize, usize)| n >= 3 && fremd <= n.max(3);
+    // 1. gerahmte Legende: größter Rahmen, der fast nur Legendeneinträge enthält
+    let flaeche = |b: &BBox| b.w() * b.h();
+    let rechteckig = |k: &ObjKind| match k {
+        ObjKind::Rect { .. } => true,
+        ObjKind::Polyline { pts, closed } => (*closed && (4..=5).contains(&pts.len())) || (pts.len() == 5 && pts[0].dist(pts[4]) < 0.5),
+        ObjKind::Path { subpaths, .. } => subpaths.len() == 1 && (4..=5).contains(&subpaths[0].len()),
+        _ => false,
+    };
+    let rahmen = doc
+        .objects
+        .iter()
+        .filter(|o| neu(o) && rechteckig(&o.kind))
+        .map(|o| ops::bounds_doc(doc, &o.kind))
+        .filter(|r| r.w() >= 20.0 && r.h() >= 15.0)
+        .filter(|r| legende_artig(bewerten(r)))
+        .max_by(|a, b| flaeche(a).total_cmp(&flaeche(b)));
+    let bereich = match rahmen {
+        Some(r) => r,
+        None => {
+            // 2. ohne Rahmen: Einträge, die in einer Spalte oder Zeile dicht untereinander stehen
+            let n = eintraege.len();
+            let mut gruppe: Vec<usize> = (0..n).collect();
+            fn wurzel(g: &mut [usize], i: usize) -> usize {
+                let mut i = i;
+                while g[i] != i {
+                    g[i] = g[g[i]];
+                    i = g[i];
+                }
+                i
+            }
+            for i in 0..n {
+                for j in i + 1..n {
+                    let (a, b) = (eintraege[i].0, eintraege[j].0);
+                    let h = (a.h() + b.h()) / 2.0;
+                    let spalte = (a.min.x - b.min.x).abs() < 1.5 && (a.min.y.max(b.min.y) - a.max.y.min(b.max.y)) < 1.5 * h;
+                    let zeile = (a.center().y - b.center().y).abs() < 0.5 * h && (a.min.x.max(b.min.x) - a.max.x.min(b.max.x)) < 8.0 * h;
+                    if spalte || zeile {
+                        let (x, y) = (wurzel(&mut gruppe, i), wurzel(&mut gruppe, j));
+                        gruppe[x] = y;
+                    }
+                }
+            }
+            let mut kandidaten: std::collections::HashMap<usize, BBox> = std::collections::HashMap::new();
+            for i in 0..n {
+                let w = wurzel(&mut gruppe, i);
+                let e = eintraege[i].0;
+                kandidaten.entry(w).and_modify(|b| *b = b.union(e)).or_insert(e);
+            }
+            let mut b = kandidaten.into_values().filter(|b| legende_artig(bewerten(b))).max_by_key(|b| bewerten(b).0)?;
+            // Überschrift „Legende“ direkt darüber mitnehmen
+            let h = 8.0f32.min(b.h());
+            if let Some((t, _)) = texte.iter().find(|(t, s)| ist_titel(s) && t.max.y <= b.min.y + 0.5 && t.max.y >= b.min.y - 2.0 * h && t.max.x >= b.min.x && t.min.x <= b.max.x) {
+                b = b.union(*t);
+            }
+            b.expand(1.0)
+        }
+    };
+    // Rahmen aus einzelnen Linien (oder ein innerer Kasten wurde gewählt): senkrechte Kanten links
+    // und rechts, die über den Bereich hinausreichen, bestimmen die volle Höhe
+    let senkrecht = |o: &Obj| -> Option<(f32, f32, f32)> {
+        let b = ops::bounds_doc(doc, &o.kind);
+        (neu(o) && b.w() < 0.8 && b.h() > 5.0).then_some((b.center().x, b.min.y, b.max.y))
+    };
+    let mut kanten: Vec<(f32, f32, f32)> = doc.objects.iter().filter_map(senkrecht).collect();
+    // auch die Seiten von Rechtecken, die den Bereich umschließen (nicht von Nachbarkästen)
+    for o in doc.objects.iter().filter(|o| neu(o) && rechteckig(&o.kind)) {
+        let b = ops::bounds_doc(doc, &o.kind);
+        if !bereich.inside(&b.expand(0.5)) {
+            continue;
+        }
+        kanten.push((b.min.x, b.min.y, b.max.y));
+        kanten.push((b.max.x, b.min.y, b.max.y));
+    }
+    let mut bereich = bereich;
+    // Kanten bündig oder bis 4 mm außerhalb (äußerer Rahmen um einen inneren Kasten)
+    // (keine Kanten, die viel länger sind, z. B. der Blattrand)
+    let ueberdeckt = |y0: f32, y1: f32| y0 <= bereich.max.y - 1.0 && y1 >= bereich.min.y + 1.0 && y1 - y0 <= bereich.h() * 2.5;
+    let links: Vec<&(f32, f32, f32)> = kanten.iter().filter(|(x, y0, y1)| *x <= bereich.min.x + 1.5 && *x >= bereich.min.x - 4.0 && ueberdeckt(*y0, *y1)).collect();
+    let rechts: Vec<&(f32, f32, f32)> = kanten.iter().filter(|(x, y0, y1)| *x >= bereich.max.x - 1.5 && *x <= bereich.max.x + 4.0 && ueberdeckt(*y0, *y1)).collect();
+    if !links.is_empty() && !rechts.is_empty() {
+        let x0 = links.iter().map(|k| k.0).fold(f32::MAX, f32::min).min(bereich.min.x);
+        let x1 = rechts.iter().map(|k| k.0).fold(f32::MIN, f32::max).max(bereich.max.x);
+        let oben = links.iter().map(|k| k.1).fold(f32::MAX, f32::min).max(rechts.iter().map(|k| k.1).fold(f32::MAX, f32::min));
+        let unten = links.iter().map(|k| k.2).fold(f32::MIN, f32::max).min(rechts.iter().map(|k| k.2).fold(f32::MIN, f32::max));
+        // höchstens gut doppelt so hoch, sonst ist es ein anderer Kasten (z. B. Übersichtsplan)
+        let neu_b = BBox::from_two(Pos::new(x0, oben.min(bereich.min.y)), Pos::new(x1, unten.max(bereich.max.y)));
+        if neu_b.h() <= bereich.h() * 2.2 && legende_artig(bewerten(&neu_b)) {
+            bereich = neu_b;
+        }
+    }
+    // Überschriftsbalken direkt darüber (gleich breit, mit „Legende“ oder leer)
+    let balken = doc
+        .objects
+        .iter()
+        .filter(|o| neu(o) && rechteckig(&o.kind))
+        .map(|o| ops::bounds_doc(doc, &o.kind))
+        .find(|r| (r.min.x - bereich.min.x).abs() < 1.5 && (r.max.x - bereich.max.x).abs() < 1.5 && (r.max.y - bereich.min.y).abs() < 1.5 && r.h() <= 15.0 && {
+            let t: Vec<&(BBox, String)> = texte.iter().filter(|(t, _)| r.contains(t.center())).collect();
+            t.iter().all(|(_, s)| ist_titel(s))
+        });
+    if let Some(r) = balken {
+        bereich = bereich.union(r);
+    }
+    // alte Legende entfernen und echte Legende einsetzen
+    let innen = bereich.expand(1.5);
+    // Inhalt benachbarter Kästen, die in den Bereich ragen (Schriftfeld, Verhaltensregeln …), bleibt
+    let nachbarn: Vec<BBox> = doc
+        .objects
+        .iter()
+        .filter(|o| neu(o) && rechteckig(&o.kind))
+        .map(|o| ops::bounds_doc(doc, &o.kind))
+        .filter(|r| r.intersects(&bereich) && !r.inside(&innen) && !bereich.inside(&r.expand(0.5)))
+        .collect();
+    let weg: Vec<u64> = doc
+        .objects
+        .iter()
+        .filter(|o| neu(o))
+        .filter(|o| {
+            let b = ops::bounds_doc(doc, &o.kind);
+            b.inside(&innen) && !nachbarn.iter().any(|n| b.inside(&n.expand(0.3)))
+        })
+        .map(|o| o.id)
+        .collect();
+    // neue Legende an die Stelle der alten in der Zeichenreihenfolge (was darüber lag, bleibt darüber)
+    let stelle = doc.objects.iter().position(|o| weg.contains(&o.id)).unwrap_or(doc.objects.len());
+    doc.objects.retain(|o| !weg.contains(&o.id));
+    // Einträge, die nur in der alten Legende vorkamen, fallen weg
+    let benutzt: Vec<String> = ops::used_legend_keys(doc).into_iter().map(|(k, _)| k).collect();
+    doc.legend.entries.retain(|e| benutzt.contains(&e.key));
+    ops::sync_legend(doc);
+    // die neue Legende darf benachbarte Kästen nicht überdecken: dort abschneiden, wo am meisten bleibt
+    for n in &nachbarn {
+        if !n.intersects(&bereich) {
+            continue;
+        }
+        let mut wahl = Vec::new();
+        for (a, b) in [
+            (bereich.min, Pos::new(bereich.max.x, n.min.y)),
+            (Pos::new(bereich.min.x, n.max.y), bereich.max),
+            (bereich.min, Pos::new(n.min.x, bereich.max.y)),
+            (Pos::new(n.max.x, bereich.min.y), bereich.max),
+        ] {
+            if b.x - a.x > 10.0 && b.y - a.y > 10.0 {
+                wahl.push(BBox::from_two(a, b));
+            }
+        }
+        if let Some(b) = wahl.into_iter().max_by(|a, b| (a.w() * a.h()).total_cmp(&(b.w() * b.h()))) {
+            bereich = b;
+        }
+    }
+    let (cols, size) = crate::render::legend_fit(doc, bereich, (bereich.w() / 60.0).clamp(0.5, 1.2));
+    let layer = doc.find_layer_by_name("Legende");
+    let id = doc.alloc_id();
+    let stelle = stelle.min(doc.objects.len());
+    doc.objects.insert(stelle, Obj {
+        id,
+        layer,
+        kind: ObjKind::Legend { a: bereich.min, b: bereich.max, cols, size },
+        style: Style { stroke: Some(StrokeStyle::new(farbe::SCHWARZ, 0.3)), fill: Fill::Farbe(farbe::WEISS) },
+        print: true,
+        locked: false,
+    });
+    Some(bereich)
+}
+
+#[cfg(test)]
+mod normvergleich {
+    use super::*;
+
+    fn xml(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+
+    /// Fremdes SVG als verschachteltes <svg> an Position x/y einsetzen (IDs eindeutig gemacht).
+    fn einbetten(src: &str, praefix: &str, x: f32, y: f32, groesse: f32) -> String {
+        let Some(start) = src.find("<svg") else { return String::new() };
+        let ende = src[start..].find('>').map(|e| start + e).unwrap_or(start);
+        let kopf = &src[start..=ende];
+        // Attribute des Wurzelelements: name="wert" bzw. name='wert'
+        let mut attrs: Vec<(String, String)> = Vec::new();
+        let mut rest = kopf.trim_start_matches("<svg").trim_end_matches('>').trim_end_matches('/');
+        while let Some(gl) = rest.find('=') {
+            let name = rest[..gl].trim().to_string();
+            let r = rest[gl + 1..].trim_start();
+            let Some(q) = r.chars().next().filter(|c| *c == '"' || *c == '\'') else { break };
+            let Some(e) = r[1..].find(q) else { break };
+            attrs.push((name, r[1..1 + e].to_string()));
+            rest = &r[1 + e + 1..];
+        }
+        let attr = |name: &str| attrs.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+        // ohne viewBox: Breite/Höhe (ohne Einheit) als Ausschnitt
+        let zahl = |v: Option<String>| v.and_then(|v| v.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse::<f32>().ok());
+        let viewbox = attr("viewBox").unwrap_or_else(|| format!("0 0 {} {}", zahl(attr("width")).unwrap_or(100.0), zahl(attr("height")).unwrap_or(100.0)));
+        let rumpf = src[ende + 1..].rsplit_once("</svg>").map(|r| r.0).unwrap_or("");
+        let rumpf = rumpf
+            .replace("id=\"", &format!("id=\"{praefix}"))
+            .replace("id='", &format!("id='{praefix}"))
+            .replace("url(#", &format!("url(#{praefix}"))
+            .replace("href=\"#", &format!("href=\"#{praefix}"))
+            .replace("href='#", &format!("href='#{praefix}"));
+        // Namensräume behalten, Darstellungsattribute (fill-rule, style …) auf eine Gruppe übertragen
+        let mut ns = String::new();
+        let mut darst = String::new();
+        for (n, v) in &attrs {
+            let v = xml(v).replace('"', "&quot;");
+            if n.starts_with("xmlns:") {
+                ns += &format!(" {n}=\"{v}\"");
+            } else if !matches!(n.as_str(), "xmlns" | "width" | "height" | "x" | "y" | "viewBox" | "version" | "id" | "preserveAspectRatio") && !n.contains(':') {
+                darst += &format!(" {n}=\"{v}\"");
+            }
+        }
+        format!("<svg{ns} x='{x}' y='{y}' width='{groesse}' height='{groesse}' viewBox='{viewbox}' preserveAspectRatio='xMidYMid meet'><g{darst}>{rumpf}</g></svg>")
+    }
+
+    /// Gegenüberstellung unserer Zeichen mit Referenz-SVGs (z. B. ISO 7010 von Wikimedia Commons) als PDF.
+    /// FLUCHTPLAN_NORMORDNER=Ordner mit E001.svg … FLUCHTPLAN_NORMPDF=ziel.pdf cargo test normvergleich_pdf -- --ignored
+    #[test]
+    #[ignore]
+    fn normvergleich_pdf() {
+        use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
+        let (Ok(ordner), Ok(ziel)) = (std::env::var("FLUCHTPLAN_NORMORDNER"), std::env::var("FLUCHTPLAN_NORMPDF")) else { return };
+        let ist_iso = |id: &str| id.len() == 4 && "EFWMP".contains(&id[..1]) && id[1..].chars().all(|c| c.is_ascii_digit());
+        let mut zeichen: Vec<_> = crate::symbols::library().iter().filter(|s| ist_iso(s.id)).collect();
+        let reihe = |id: &str| "EFWMP".find(&id[..1]).unwrap_or(9);
+        zeichen.sort_by_key(|s| (reihe(s.id), s.id));
+
+        let eigen_svg = |svg: &str| format!("<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'>{svg}</svg>");
+        // Abweichung wie bei der Symbolerkennung (mittlere Farbdifferenz, 0 = gleich)
+        let bild = |svg: &str| rastern(svg).and_then(|p| normieren(&p)).map(|b| b.0);
+
+        let (w, h) = (210.0f32, 297.0f32);
+        let (zeile_h, kopf, pro_seite) = (31.0f32, 30.0f32, 16usize);
+        let mut seiten = Vec::new();
+        let mut abweichungen = Vec::new();
+        let anzahl_seiten = zeichen.len().div_ceil(pro_seite);
+        for (si, teil) in zeichen.chunks(pro_seite).enumerate() {
+            let mut s = format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='{w}mm' height='{h}mm' viewBox='0 0 {w} {h}' font-family='Arial'>\
+                 <rect width='{w}' height='{h}' fill='white'/>\
+                 <text x='12' y='15' font-size='6' font-weight='bold'>OpenFluchtplan – Vergleich mit ISO 7010</text>\
+                 <text x='12' y='21' font-size='3'>Links: unser Zeichen · Rechts: Referenz ISO 7010 (Wikimedia Commons) · Abweichung 0 = identisch, ab 0,10 rot markiert</text>\
+                 <text x='{}' y='{}' font-size='3' text-anchor='end'>Seite {} / {anzahl_seiten}</text>",
+                w - 12.0,
+                h - 8.0,
+                si + 1
+            );
+            for (i, sym) in teil.iter().enumerate() {
+                let (sp, zl) = (i % 2, i / 2);
+                let (x, y) = (12.0 + sp as f32 * 95.0, kopf + zl as f32 * zeile_h);
+                let eigen = eigen_svg(&sym.svg);
+                let referenz = std::fs::read_to_string(format!("{ordner}/{}.svg", sym.id)).ok();
+                let d = referenz.as_deref().and_then(|r| Some(abstand(&bild(&eigen)?, &bild(r)?)));
+                let farbe = match d {
+                    Some(v) if v >= 0.10 => "#b01e23",
+                    Some(_) => "#237f52",
+                    None => "#666666",
+                };
+                s += &format!("<rect x='{x}' y='{y}' width='91' height='{}' fill='none' stroke='#cccccc' stroke-width='0.2'/>", zeile_h - 2.0);
+                s += &format!("<text x='{}' y='{}' font-size='4' font-weight='bold'>{}</text>", x + 2.0, y + 6.0, sym.id);
+                // Name auf bis zu drei Zeilen umbrechen
+                let mut zeilen = vec![String::new()];
+                for wort in sym.name.split_whitespace() {
+                    if zeilen.last().unwrap().len() + wort.len() > 18 && !zeilen.last().unwrap().is_empty() {
+                        zeilen.push(String::new());
+                    }
+                    let z = zeilen.last_mut().unwrap();
+                    if !z.is_empty() {
+                        z.push(' ');
+                    }
+                    z.push_str(wort);
+                }
+                for (k, z) in zeilen.iter().take(3).enumerate() {
+                    s += &format!("<text x='{}' y='{}' font-size='2.8'>{}</text>", x + 2.0, y + 11.0 + k as f32 * 3.4, xml(z));
+                }
+                let text_d = d.map(|v| format!("Abweichung {:.2}", v).replace('.', ",")).unwrap_or_else(|| "keine Referenz".into());
+                s += &format!("<text x='{}' y='{}' font-size='2.8' fill='{farbe}' font-weight='bold'>{text_d}</text>", x + 2.0, y + zeile_h - 5.0);
+                s += &einbetten(&eigen, &format!("u{}_", sym.id), x + 36.0, y + 2.0, 24.0);
+                if let Some(r) = &referenz {
+                    s += &einbetten(r, &format!("r{}_", sym.id), x + 64.0, y + 2.0, 24.0);
+                }
+                s += &format!("<text x='{}' y='{}' font-size='2.2' fill='#666' text-anchor='middle'>unser</text>", x + 48.0, y + zeile_h - 2.6);
+                s += &format!("<text x='{}' y='{}' font-size='2.2' fill='#666' text-anchor='middle'>ISO 7010</text>", x + 76.0, y + zeile_h - 2.6);
+                abweichungen.push((sym.id, d));
+            }
+            s += "</svg>";
+            seiten.push(s);
+        }
+
+        let mut alloc = Ref::new(1);
+        let (catalog, tree_id) = (alloc.bump(), alloc.bump());
+        let mut pdf = Pdf::new();
+        let mut ids = Vec::new();
+        let mut chunks = Vec::new();
+        let (wp, hp) = (w / 25.4 * 72.0, h / 25.4 * 72.0);
+        for s in &seiten {
+            let t = svg2pdf::usvg::Tree::from_str(s, crate::export::usvg_options()).unwrap();
+            let (chunk, svg_ref) = svg2pdf::to_chunk(&t, svg2pdf::ConversionOptions::default()).unwrap();
+            let mut map = std::collections::HashMap::new();
+            let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
+            ids.push((alloc.bump(), alloc.bump(), map[&svg_ref]));
+            chunks.push(chunk);
+        }
+        pdf.catalog(catalog).pages(tree_id);
+        pdf.pages(tree_id).kids(ids.iter().map(|p| p.0)).count(ids.len() as i32);
+        for (page_id, content_id, svg_id) in &ids {
+            let mut page = pdf.page(*page_id);
+            page.media_box(Rect::new(0.0, 0.0, wp, hp));
+            page.parent(tree_id);
+            page.contents(*content_id);
+            page.resources().x_objects().pair(Name(b"P1"), *svg_id);
+            page.finish();
+            let mut c = Content::new();
+            c.transform([wp, 0.0, 0.0, hp, 0.0, 0.0]).x_object(Name(b"P1"));
+            pdf.stream(*content_id, &c.finish());
+        }
+        for c in &chunks {
+            pdf.extend(c);
+        }
+        std::fs::write(&ziel, pdf.finish()).unwrap();
+        if std::env::var("FLUCHTPLAN_NORMSVG").is_ok() {
+            for (i, s) in seiten.iter().enumerate() {
+                std::fs::write(format!("{ziel}.seite{}.svg", i + 1), s).unwrap();
+            }
+        }
+        for (id, d) in abweichungen {
+            eprintln!("VERGLEICH {id} {}", d.map(|v| format!("{v:.3}")).unwrap_or("-".into()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod legende_tests {
+    use super::*;
+
+    fn obj(doc: &mut Doc, kind: ObjKind, style: Style) -> u64 {
+        let id = doc.alloc_id();
+        doc.objects.push(Obj { id, layer: 0, kind, style, print: true, locked: false });
+        id
+    }
+    fn text(doc: &mut Doc, x: f32, y: f32, t: &str) -> u64 {
+        obj(doc, ObjKind::Text { pos: Pos::new(x, y), text: t.into(), size: 2.5, bold: false, italic: false, align: TAlign::Links, rot: 0.0 }, Style::default())
+    }
+    fn rahmen(doc: &mut Doc, x0: f32, y0: f32, x1: f32, y1: f32) -> u64 {
+        obj(doc, ObjKind::Rect { a: Pos::new(x0, y0), b: Pos::new(x1, y1), radius: 0.0 }, Style::line(farbe::SCHWARZ, 0.3))
+    }
+
+    /// Gerahmte Legende wird ersetzt, der Kasten mit Verhaltensregeln daneben bleibt unberührt.
+    #[test]
+    fn gezeichnete_legende_ersetzen() {
+        let mut doc = Doc::default();
+        // Zeichen im Plan
+        obj(&mut doc, ObjKind::Symbol { id: "F001".into(), pos: Pos::new(100.0, 100.0), size: 8.0, rot: 0.0 }, Style::NONE);
+        obj(&mut doc, ObjKind::Symbol { id: "STANDORT".into(), pos: Pos::new(120.0, 100.0), size: 8.0, rot: 0.0 }, Style::NONE);
+        // Legende: Rahmen, Überschrift, Zeichen mit Text
+        rahmen(&mut doc, 300.0, 140.0, 380.0, 200.0);
+        text(&mut doc, 330.0, 143.0, "Legende");
+        for (k, (id, t)) in [("F001", "Feuerlöscher"), ("STANDORT", "Standort"), ("E003", "Erste Hilfe"), ("E007", "Sammelstelle")].iter().enumerate() {
+            let y = 155.0 + k as f32 * 10.0;
+            obj(&mut doc, ObjKind::Symbol { id: (*id).into(), pos: Pos::new(306.0, y), size: 8.0, rot: 0.0 }, Style::NONE);
+            text(&mut doc, 312.0, y - 1.0, t);
+        }
+        // Verhaltensregeln: Zeichen mit Text, aber viele weitere Texte
+        let regeln = rahmen(&mut doc, 200.0, 140.0, 290.0, 200.0);
+        obj(&mut doc, ObjKind::Symbol { id: "F001".into(), pos: Pos::new(206.0, 150.0), size: 6.0, rot: 0.0 }, Style::NONE);
+        text(&mut doc, 211.0, 149.0, "Feuerlöscher benutzen");
+        obj(&mut doc, ObjKind::Symbol { id: "E003".into(), pos: Pos::new(206.0, 160.0), size: 6.0, rot: 0.0 }, Style::NONE);
+        text(&mut doc, 211.0, 159.0, "Erste Hilfe leisten");
+        obj(&mut doc, ObjKind::Symbol { id: "E004".into(), pos: Pos::new(206.0, 170.0), size: 6.0, rot: 0.0 }, Style::NONE);
+        text(&mut doc, 211.0, 169.0, "Telefon 112");
+        for (k, t) in ["Ruhe bewahren", "Wer meldet?", "Was ist passiert?", "Wie viele Verletzte?", "Warten auf Rückfragen!"].iter().enumerate() {
+            text(&mut doc, 230.0, 175.0 + k as f32 * 4.0, t);
+        }
+        let vorher_regeln = doc.objects.iter().filter(|o| ops::bounds_doc(&doc, &o.kind).inside(&BBox::from_two(Pos::new(199.0, 139.0), Pos::new(291.0, 201.0)))).count();
+        let ids: Vec<u64> = doc.objects.iter().map(|o| o.id).collect();
+        ops::sync_legend(&mut doc);
+
+        let b = legende_ersetzen(&mut doc, &ids).expect("Legende nicht erkannt");
+        assert!((b.min.x - 300.0).abs() < 0.5 && (b.max.y - 200.0).abs() < 0.5, "falscher Bereich {b:?}");
+        let legenden: Vec<&Obj> = doc.objects.iter().filter(|o| matches!(o.kind, ObjKind::Legend { .. })).collect();
+        assert_eq!(legenden.len(), 1);
+        // alte Legendentexte sind weg, Regeln unverändert
+        assert!(!doc.objects.iter().any(|o| matches!(&o.kind, ObjKind::Text { text, .. } if text == "Sammelstelle")));
+        assert!(doc.objects.iter().any(|o| o.id == regeln));
+        let nachher_regeln = doc.objects.iter().filter(|o| ops::bounds_doc(&doc, &o.kind).inside(&BBox::from_two(Pos::new(199.0, 139.0), Pos::new(291.0, 201.0)))).count();
+        assert_eq!(vorher_regeln, nachher_regeln);
+        // Sammelstelle kam nur in der alten Legende vor
+        let keys: Vec<&str> = doc.legend.entries.iter().map(|e| e.key.as_str()).collect();
+        assert!(keys.contains(&"sym:F001") && keys.contains(&"sym:STANDORT") && !keys.contains(&"sym:E007"), "{keys:?}");
+    }
+}
+
+/// Ebenen, auf die der Import erkannte Planbereiche legt (je Bereich eine Gruppe).
+pub const BEREICH_EBENEN: [&str; 5] = ["Kopfzeile", "Verhaltensregeln", "Übersichtsplan", "Schriftfeld", "Prüfplakette"];
+
+fn ist_rechteckig(k: &ObjKind) -> bool {
+    match k {
+        ObjKind::Rect { .. } => true,
+        ObjKind::Polyline { pts, closed } => (*closed && (4..=5).contains(&pts.len())) || (pts.len() == 5 && pts[0].dist(pts[4]) < 0.5),
+        ObjKind::Path { subpaths, .. } => subpaths.len() == 1 && (4..=5).contains(&subpaths[0].len()),
+        _ => false,
+    }
+}
+
+/// Alle Objekte (aus `ids`, oberste Ebene) innerhalb `bb` zu einer Gruppe auf der Ebene `ebene` zusammenfassen.
+fn gruppieren(doc: &mut Doc, ids: &[u64], bb: BBox, ebene: &str) -> Option<u64> {
+    let innen = bb.expand(0.5);
+    let teil: Vec<u64> = doc
+        .objects
+        .iter()
+        .filter(|o| {
+            let b = ops::bounds_doc(doc, &o.kind);
+            // Textbreiten sind geschätzt und ragen leicht über den Kasten: bei Texten zählt die Mitte
+            let drin = b.inside(&innen) || (matches!(o.kind, ObjKind::Text { .. }) && b.center().x > bb.min.x && b.center().x < bb.max.x && b.center().y > bb.min.y && b.center().y < bb.max.y);
+            ids.contains(&o.id) && !o.locked && !matches!(o.kind, ObjKind::Legend { .. }) && drin
+        })
+        .map(|o| o.id)
+        .collect();
+    if teil.len() < 2 {
+        return None;
+    }
+    let stelle = doc.objects.iter().position(|o| teil.contains(&o.id))?;
+    let mut kinder = Vec::new();
+    doc.objects.retain(|o| {
+        if teil.contains(&o.id) {
+            kinder.push(o.clone());
+            false
+        } else {
+            true
+        }
+    });
+    let layer = doc.find_layer_by_name(ebene);
+    let id = doc.alloc_id();
+    doc.objects.insert(stelle.min(doc.objects.len()), Obj { id, layer, kind: ObjKind::Group { children: kinder }, style: Style::default(), print: true, locked: false });
+    Some(id)
+}
+
+/// Planbereiche eines importierten Plans aufbereiten:
+/// - Schriftfeld: Angaben (Objekt, Gebäude, Etage, Stand, Plan-Nr.) in die Plandaten übernehmen und die
+///   Werte durch Platzhalter ersetzen, damit sie sich mit den Plandaten ändern
+/// - Kopfzeile, Verhaltensregeln, Übersichtsplan, Schriftfeld, Prüfplakette je als eine Gruppe auf eigene
+///   Ebene legen (ein Klick wählt den ganzen Bereich, zum Verschieben oder Löschen)
+///
+/// Liefert die Namen der aufbereiteten Bereiche.
+pub fn bereiche_aufbereiten(doc: &mut Doc, ids: &[u64]) -> Vec<&'static str> {
+    let mut erledigt = Vec::new();
+    let texte = |doc: &Doc| -> Vec<(u64, BBox, String)> {
+        doc.objects
+            .iter()
+            .filter(|o| ids.contains(&o.id))
+            .filter_map(|o| match &o.kind {
+                ObjKind::Text { text, .. } if !text.trim().is_empty() => Some((o.id, ops::bounds_doc(doc, &o.kind), text.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let kaesten = |doc: &Doc| -> Vec<BBox> { doc.objects.iter().filter(|o| ids.contains(&o.id) && ist_rechteckig(&o.kind)).map(|o| ops::bounds_doc(doc, &o.kind)).collect() };
+    let (pw, ph) = doc.page.size();
+    let blatt = pw * ph;
+
+    // --- Schriftfeld ---
+    let feld = |n: &str| -> Option<&'static str> {
+        Some(match n {
+            "objekt" => "objekt",
+            "gebäude" | "gebaeude" | "bauteil" => "gebaeude",
+            "etage" | "geschoss" | "ebene" => "geschoss",
+            "stand" | "datum" => "stand",
+            "plannr" | "plannummer" | "zeichnungsnr" => "plannummer",
+            _ => return None,
+        })
+    };
+    let alle = texte(doc);
+    let labels: Vec<(u64, BBox, &'static str)> = alle.iter().filter_map(|(id, b, t)| feld(&begriff_norm(t)).map(|f| (*id, *b, f))).collect();
+    let mut werte: Vec<(&'static str, Vec<u64>, String)> = Vec::new();
+    for (lid, lb, f) in &labels {
+        let h = lb.h().max(1.0);
+        let mut zeile: Vec<&(u64, BBox, String)> = alle
+            .iter()
+            .filter(|(id, b, _)| id != lid && b.min.x >= lb.max.x - 0.5 && b.min.x <= lb.max.x + 120.0 && b.center().y >= lb.min.y - 0.5 * h && b.center().y <= lb.max.y + 0.5 * h)
+            .collect();
+        zeile.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
+        // bis zur nächsten Beschriftung derselben Zeile
+        let teil: Vec<&(u64, BBox, String)> = zeile.into_iter().take_while(|(id, _, _)| !labels.iter().any(|(l, _, _)| l == id)).collect();
+        let wert = teil.iter().map(|(_, _, t)| t.trim()).collect::<Vec<_>>().join(" ");
+        if !wert.is_empty() && !werte.iter().any(|(g, _, _)| g == f) {
+            werte.push((f, teil.iter().map(|(id, _, _)| *id).collect(), wert));
+        }
+    }
+    // Werte nur übernehmen, wenn sie als Text vorliegen (oft sind sie als Umrisse gezeichnet)
+    if werte.len() >= 3 {
+        for (f, tids, wert) in &werte {
+            let i = &mut doc.info;
+            match *f {
+                "objekt" => i.objekt = wert.clone(),
+                "gebaeude" => i.gebaeude = wert.clone(),
+                "geschoss" => i.geschoss = wert.clone(),
+                "stand" => i.stand = wert.clone(),
+                _ => i.plannummer = wert.clone(),
+            }
+            // erster Werttext wird zum Platzhalter, weitere Teile derselben Zeile entfallen
+            if let Some(o) = doc.objects.iter_mut().find(|o| o.id == tids[0]) {
+                if let ObjKind::Text { text, .. } = &mut o.kind {
+                    *text = format!("{{{f}}}");
+                }
+            }
+            doc.objects.retain(|o| !tids[1..].contains(&o.id));
+        }
+    }
+    let mut feldarten: Vec<&str> = labels.iter().map(|l| l.2).collect();
+    feldarten.sort();
+    feldarten.dedup();
+    if feldarten.len() >= 3 {
+        let lb = labels.iter().map(|l| l.1).reduce(|a, b| a.union(b)).unwrap();
+        if let Some(k) = kaesten(doc).into_iter().filter(|k| lb.inside(&k.expand(0.5)) && k.w() * k.h() < blatt * 0.25).min_by(|a, b| (a.w() * a.h()).total_cmp(&(b.w() * b.h()))) {
+            gruppieren(doc, ids, k, "Schriftfeld");
+        }
+        erledigt.push("Schriftfeld");
+    }
+
+    // --- Bereiche mit Überschrift ---
+    // (Überschrift, Ebene, größter Kasten um die Überschrift, der keine andere Überschrift enthält)
+    let titel = |n: &str| -> Option<&'static str> {
+        if n.starts_with("verhaltenimbrandfall") || n.starts_with("verhaltenbeiunfällen") || n.starts_with("verhaltenbeiunfaellen") {
+            Some("Verhaltensregeln")
+        } else if n.starts_with("übersichtsplan") || n.starts_with("uebersichtsplan") || n.starts_with("lageplan") {
+            Some("Übersichtsplan")
+        } else if n.contains("fluchtundrettungsplan") || n.contains("brandschutzplan") {
+            Some("Kopfzeile")
+        } else {
+            None
+        }
+    };
+    let alle = texte(doc);
+    let ueberschriften: Vec<(BBox, &'static str)> = alle.iter().filter_map(|(_, b, t)| titel(&begriff_norm(t)).map(|e| (*b, e))).collect();
+    let enthaelt = |k: &BBox, p: Pos| p.x >= k.min.x - 0.5 && p.x <= k.max.x + 0.5 && p.y >= k.min.y - 0.5 && p.y <= k.max.y + 0.5;
+    for (tb, ebene) in &ueberschriften {
+        let andere: Vec<Pos> = ueberschriften.iter().filter(|(b, _)| b != tb).map(|(b, _)| b.center()).collect();
+        let alle_k = kaesten(doc);
+        let k = alle_k
+            .iter()
+            .filter(|k| enthaelt(k, tb.center()) && tb.min.x >= k.min.x - 1.0 && tb.max.x <= k.max.x + 1.0 && k.w() * k.h() < blatt * 0.3 && !andere.iter().any(|a| enthaelt(k, *a)))
+            .max_by(|a, b| (a.w() * a.h()).total_cmp(&(b.w() * b.h())))
+            .copied();
+        // Überschrift im eigenen Balken: direkt anschließenden Kasten gleicher Breite dazunehmen
+        let k = k.map(|k| {
+            let mut k = k;
+            for n in &alle_k {
+                let gleich_breit = (n.min.x - k.min.x).abs() < 1.5 && (n.max.x - k.max.x).abs() < 1.5;
+                let anschliessend = (n.min.y - k.max.y).abs() < 2.0 || (k.min.y - n.max.y).abs() < 2.0;
+                if gleich_breit && anschliessend && n.w() * n.h() < blatt * 0.3 && !andere.iter().any(|a| enthaelt(n, *a)) {
+                    k = k.union(*n);
+                }
+            }
+            k
+        });
+        if let Some(k) = k {
+            if gruppieren(doc, ids, k, ebene).is_some() && !erledigt.contains(ebene) {
+                erledigt.push(ebene);
+            }
+        }
+    }
+
+    // --- Prüfplakette („Nächste Prüfung“ mit Plakette darunter) ---
+    let alle = texte(doc);
+    let pruef: Vec<BBox> = alle.iter().filter(|(_, _, t)| matches!(begriff_norm(t).as_str(), "nächste" | "prüfung" | "nächsteprüfung")).map(|(_, b, _)| *b).collect();
+    if let Some(tb) = pruef.into_iter().reduce(|a, b| a.union(b)) {
+        // Hinweisschild um den Text und die Plakette (etwa so breit wie das Schild) darunter
+        let w = tb.w().max(10.0) * 1.6;
+        let bb = BBox::from_two(Pos::new(tb.center().x - w / 2.0, tb.min.y - 3.0), Pos::new(tb.center().x + w / 2.0, tb.max.y + w * 1.3));
+        if gruppieren(doc, ids, bb, "Prüfplakette").is_some() {
+            erledigt.push("Prüfplakette");
+        }
+    }
+    erledigt
+}
+
+/// Nur den Grundriss behalten: Zeichen, Legende, Bausteine, erkannte Planbereiche (Kopfzeile, Regeln,
+/// Übersichtsplan, Schriftfeld, Prüfplakette), Rettungswegflächen, Standort-Hinweis und Blattrahmen entfernen.
+/// Liefert die Zahl der entfernten Objekte.
+pub fn nur_grundriss(doc: &mut Doc) -> usize {
+    let bereich_ebenen: Vec<u32> = doc.layers.iter().filter(|l| BEREICH_EBENEN.contains(&l.name.as_str()) || l.name == "Legende").map(|l| l.id).collect();
+    let (pw, ph) = doc.page.size();
+    // Standort-Hinweis: Text „Standort“ samt gefülltem Kästchen darum
+    let standort_texte: Vec<BBox> = doc
+        .objects
+        .iter()
+        .filter_map(|o| match &o.kind {
+            ObjKind::Text { text, .. } if begriff_norm(text) == "standort" => Some(ops::bounds_doc(doc, &o.kind)),
+            _ => None,
+        })
+        .collect();
+    // gezeichnete Richtungspfeile: kleine Formen in Sicherheitsgrün
+    fn gruen(c: Color) -> bool {
+        c.1 >= 90 && c.0 < 80 && (c.1 as i32 - c.2 as i32) > 20
+    }
+    fn gruen_gefuellt(o: &Obj) -> bool {
+        match &o.kind {
+            ObjKind::Group { children } => children.iter().any(gruen_gefuellt),
+            _ => matches!(o.style.fill, Fill::Farbe(c) if gruen(c)),
+        }
+    }
+    let weg = |o: &Obj, doc: &Doc| -> bool {
+        if o.locked {
+            return false;
+        }
+        let b = ops::bounds_doc(doc, &o.kind);
+        let gefuellt = matches!(o.style.fill, Fill::Farbe(_));
+        match &o.kind {
+            ObjKind::Symbol { .. } | ObjKind::Legend { .. } | ObjKind::Block { .. } | ObjKind::Route { .. } | ObjKind::Area { .. } => true,
+            _ if bereich_ebenen.contains(&o.layer) => true,
+            ObjKind::Text { text, .. } if begriff_norm(text) == "standort" => true,
+            // Blattrahmen
+            _ if ist_rechteckig(&o.kind) && b.w() > pw * 0.9 && b.h() > ph * 0.85 => true,
+            // Rettungswegflächen und Standort-Kästchen
+            _ if gefuellt && ops::legend_key(doc, &o.kind, &o.style).is_some_and(|(k, _)| k == "area:fluchtbereich") => true,
+            _ if b.w() < 12.0 && b.h() < 12.0 && gruen_gefuellt(o) => true,
+            _ if gefuellt && b.w() < 40.0 && standort_texte.iter().any(|t| t.inside(&b.expand(0.5))) => true,
+            _ => false,
+        }
+    };
+    let vorher = doc.objects.len();
+    let behalten: Vec<bool> = doc.objects.iter().map(|o| !weg(o, doc)).collect();
+    let mut i = 0;
+    doc.objects.retain(|_| {
+        i += 1;
+        behalten[i - 1]
+    });
+    let benutzt: Vec<String> = ops::used_legend_keys(doc).into_iter().map(|(k, _)| k).collect();
+    doc.legend.entries.retain(|e| benutzt.contains(&e.key));
+    vorher - doc.objects.len()
+}
+#[cfg(test)]
+mod bereiche_tests {
+    use super::*;
+
+    fn obj(doc: &mut Doc, kind: ObjKind, style: Style) -> u64 {
+        let id = doc.alloc_id();
+        doc.objects.push(Obj { id, layer: 0, kind, style, print: true, locked: false });
+        id
+    }
+    fn text(doc: &mut Doc, x: f32, y: f32, t: &str) -> u64 {
+        obj(doc, ObjKind::Text { pos: Pos::new(x, y), text: t.into(), size: 2.5, bold: false, italic: false, align: TAlign::Links, rot: 0.0 }, Style::default())
+    }
+    fn rahmen(doc: &mut Doc, x0: f32, y0: f32, x1: f32, y1: f32) -> u64 {
+        obj(doc, ObjKind::Rect { a: Pos::new(x0, y0), b: Pos::new(x1, y1), radius: 0.0 }, Style::line(farbe::SCHWARZ, 0.3))
+    }
+    fn ebene(doc: &Doc, o: &Obj) -> String {
+        doc.layers.iter().find(|l| l.id == o.layer).map(|l| l.name.clone()).unwrap_or_default()
+    }
+
+    /// Schriftfeld-Werte werden zu Platzhaltern, Kästen zu Gruppen auf eigenen Ebenen; „Nur Grundriss“ räumt alles ab.
+    #[test]
+    fn bereiche_und_nur_grundriss() {
+        let mut doc = Doc::default();
+        // Grundriss
+        let wand = obj(&mut doc, ObjKind::Polyline { pts: vec![Pos::new(100.0, 60.0), Pos::new(250.0, 60.0), Pos::new(250.0, 200.0)], closed: false }, Style::line(farbe::SCHWARZ, 1.0));
+        let raum = text(&mut doc, 150.0, 120.0, "Lager");
+        obj(&mut doc, ObjKind::Symbol { id: "F001".into(), pos: Pos::new(120.0, 100.0), size: 8.0, rot: 0.0 }, Style::NONE);
+        // Kopfzeile
+        rahmen(&mut doc, 5.0, 5.0, 415.0, 35.0);
+        text(&mut doc, 50.0, 12.0, "FLUCHT- UND RETTUNGSPLAN");
+        // Verhaltensregeln
+        rahmen(&mut doc, 8.0, 40.0, 85.0, 125.0);
+        text(&mut doc, 20.0, 44.0, "Verhalten im Brandfall");
+        text(&mut doc, 20.0, 60.0, "Ruhe bewahren");
+        // Übersichtsplan: Überschrift in eigenem Balken, ragt etwas heraus
+        rahmen(&mut doc, 320.0, 38.0, 412.0, 49.0);
+        text(&mut doc, 336.0, 39.0, "Übersichtsplan");
+        rahmen(&mut doc, 320.0, 49.0, 412.0, 147.0);
+        rahmen(&mut doc, 330.0, 60.0, 400.0, 130.0);
+        // Schriftfeld
+        rahmen(&mut doc, 325.0, 254.0, 415.0, 292.0);
+        for (x, y, l, w) in [(326.0, 257.0, "Objekt", "Evers & Co"), (326.0, 264.0, "Gebäude:", "Kantine"), (371.0, 264.0, "Etage:", "Erdgeschoss"), (326.0, 270.0, "Stand:", "09 / 2024"), (371.0, 270.0, "Plan-Nr.:", "23-034/920")] {
+            text(&mut doc, x, y, l);
+            text(&mut doc, x + 16.0, y, w);
+        }
+        let ids: Vec<u64> = doc.objects.iter().map(|o| o.id).collect();
+        let fertig = bereiche_aufbereiten(&mut doc, &ids);
+        for b in ["Schriftfeld", "Verhaltensregeln", "Übersichtsplan", "Kopfzeile"] {
+            assert!(fertig.contains(&b), "{b} fehlt: {fertig:?}");
+        }
+        assert_eq!(doc.info.objekt, "Evers & Co");
+        assert_eq!(doc.info.gebaeude, "Kantine");
+        assert_eq!(doc.info.geschoss, "Erdgeschoss");
+        assert_eq!(doc.info.stand, "09 / 2024");
+        assert_eq!(doc.info.plannummer, "23-034/920");
+        // Werte als Platzhalter im Schriftfeld, die Darstellung zeigt den Wert aus den Plandaten
+        let mut platzhalter = Vec::new();
+        fn sammeln(o: &Obj, out: &mut Vec<String>) {
+            match &o.kind {
+                ObjKind::Text { text, .. } if text.starts_with('{') => out.push(text.clone()),
+                ObjKind::Group { children } => children.iter().for_each(|c| sammeln(c, out)),
+                _ => {}
+            }
+        }
+        doc.objects.iter().for_each(|o| sammeln(o, &mut platzhalter));
+        assert_eq!(platzhalter.len(), 5, "{platzhalter:?}");
+        assert_eq!(ops::platzhalter(&doc, "{gebaeude}"), "Kantine");
+        // Übersichtsplan samt Balken und Inhalt in einer Gruppe
+        let ue = doc.objects.iter().find(|o| ebene(&doc, o) == "Übersichtsplan").expect("Gruppe Übersichtsplan");
+        assert!(matches!(&ue.kind, ObjKind::Group { children } if children.len() == 4));
+        // Grundriss bleibt außerhalb der Gruppen
+        assert!(doc.objects.iter().any(|o| o.id == wand) && doc.objects.iter().any(|o| o.id == raum));
+
+        let n = nur_grundriss(&mut doc);
+        assert!(n >= 5, "nur {n} entfernt");
+        let rest: Vec<u64> = doc.objects.iter().map(|o| o.id).collect();
+        assert_eq!(rest, vec![wand, raum]);
     }
 }
