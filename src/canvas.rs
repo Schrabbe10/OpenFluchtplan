@@ -101,6 +101,14 @@ pub fn install_fonts(ctx: &egui::Context) {
         fonts.font_data.insert(key.clone(), egui::FontData::from_static(bytes).into());
         fonts.families.entry(FontFamily::Name(fam.into())).or_default().push(key);
     }
+    // Oberflächenschrift: Segoe UI (Windows), sonst die mitgelieferte Liberation Sans
+    let ui_font = load("segoeui.ttf")
+        .or_else(|| crate::plattform::SCHRIFTEN.first().map(|b| b.to_vec()))
+        .or_else(|| std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts/LiberationSans-Regular.ttf")).ok());
+    if let Some(bytes) = ui_font {
+        fonts.font_data.insert("ui".into(), egui::FontData::from_owned(bytes).into());
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "ui".into());
+    }
     // Rückfall auf Standardschrift, falls Arial fehlt
     for fam in ["plan", "plan_bold", "plan_italic", "plan_bold_italic"] {
         let e = fonts.families.entry(FontFamily::Name(fam.into())).or_default();
