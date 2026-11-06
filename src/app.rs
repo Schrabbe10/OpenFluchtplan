@@ -553,7 +553,9 @@ impl App {
         let plan = |d: &Datei| std::str::from_utf8(&d.bytes).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(s).map_err(|e| e.to_string()));
         match d.zweck {
             Zweck::PlanOeffnen => match plan(&d) {
-                Ok(doc) => {
+                Ok(mut doc) => {
+                    // Legende um Zeichen ergänzen, die noch nicht eingetragen sind (z. B. ältere oder fremd erstellte Dateien)
+                    ops::sync_legend(&mut doc);
                     let mut tab = DocTab::new(doc, d.pfad.clone());
                     if d.pfad.is_none() {
                         // Browser: Name merken, damit „Speichern“ denselben Dateinamen vorschlägt
@@ -581,7 +583,10 @@ impl App {
                 Err(e) => self.error(e),
             },
             Zweck::Bild => match import::load_image_bytes(&d.name, &d.bytes) {
-                Ok(data) => self.insert_image(data, area, 0.6),
+                Ok(data) => {
+                    self.import_ziel(&d.name);
+                    self.insert_image(data, area, 0.6)
+                }
                 Err(e) => self.error(e),
             },
             // Seite und Importoptionen immer abfragen (wie im Referenzprodukt)
@@ -601,6 +606,7 @@ impl App {
                 };
                 match import::load_dxf(&bytes, area, self.doc().scale_n, false) {
                     Ok(objs) => {
+                        self.import_ziel(&d.name);
                         let tab = self.tab_mut();
                         tab.push_undo();
                         let layer = tab.doc.find_layer_by_name("Grundriss");
@@ -611,6 +617,7 @@ impl App {
                         }
                         tab.doc.objects.insert(0, Obj { id, layer, kind: ObjKind::Group { children }, style: Style::default(), print: true, locked: false });
                         tab.doc.renumber();
+                        ops::sync_legend(&mut tab.doc);
                         tab.sel.clear();
                         self.status = "CAD-Grundriss importiert (als Gruppe auf Ebene „Grundriss“).".into();
                     }
@@ -792,6 +799,23 @@ impl App {
         }
     }
 
+    /// Grundriss-Importe (Bild, PDF, DXF/DWG) kommen in einen eigenen Tab, wenn der aktuelle Plan
+    /// schon Inhalt hat – sonst lägen zwei Pläne übereinander. Rahmen, Format und Planangaben werden übernommen.
+    pub fn import_ziel(&mut self, name: &str) {
+        let src = self.doc();
+        if src.objects.is_empty() {
+            return;
+        }
+        let mut doc = Doc { frame: src.frame, page: src.page, scale_n: src.scale_n, ..Doc::default() };
+        doc.frame_cfg = src.frame_cfg.clone();
+        doc.info = src.info.clone();
+        doc.legend.title = src.legend.title.clone();
+        doc.legend.langs = src.legend.langs.clone();
+        let mut tab = DocTab::new(doc, None);
+        tab.name = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned());
+        self.add_tab(tab);
+    }
+
     pub fn import_dialog(&mut self, kind: &str) {
         match kind {
             "bild" => plattform::waehlen(Zweck::Bild, "Bilder", &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"]),
@@ -829,9 +853,12 @@ impl App {
         tab.push_undo();
         tab.sel = crate::pdfvec::place(&mut tab.doc, pg, opt);
         tab.fit = true;
+        let sel = tab.sel.clone();
+        let zeichen = tab.doc.objects.iter().filter(|o| sel.contains(&o.id) && matches!(o.kind, ObjKind::Symbol { .. })).count();
         self.status = format!(
-            "PDF als Vektorgrafik importiert: {n} Objekte{}, Ebenen je Farbe „PDF #…“.",
-            if opt.group { " (gruppiert – „Gruppe aufheben“ zum Bearbeiten einzelner Elemente)" } else { "" }
+            "PDF als Vektorgrafik importiert: {n} Objekte{}{}, Ebenen je Farbe „PDF #…“.",
+            if opt.group { " (gruppiert – „Gruppe aufheben“ zum Bearbeiten einzelner Elemente)" } else { "" },
+            if zeichen > 0 { format!(", {zeichen} Sicherheitszeichen erkannt und in die Legende übernommen") } else { String::new() }
         );
     }
 
@@ -991,10 +1018,14 @@ impl App {
         let tab = self.tab_mut();
         tab.push_undo();
         let ids: Vec<u64> = if tab.sel.is_empty() { tab.doc.objects.iter().map(|o| o.id).collect() } else { tab.sel.clone() };
+        let vorher: std::collections::HashSet<u64> = tab.doc.objects.iter().map(|o| o.id).collect();
         let n = crate::ops::symbole_zusammenfassen(&mut tab.doc, &ids, crate::pdfvec::SYMBOL_MAX_MM);
+        // neue Gruppen und gewählte Objekte mit der Symbolbibliothek vergleichen
+        let pruefen: Vec<u64> = tab.doc.objects.iter().map(|o| o.id).filter(|id| !vorher.contains(id) || ids.contains(id)).collect();
+        let m = crate::erkennung::normzeichen_einsetzen(&mut tab.doc, Some(&pruefen));
         tab.sel.clear();
         tab.dirty = true;
-        self.status = format!("{n} Symbole zu Gruppen zusammengefasst.");
+        self.status = format!("{n} Symbole zu Gruppen zusammengefasst, {m} davon als Normzeichen erkannt und ersetzt (Legende aktualisiert).");
     }
 
     pub fn ungroup(&mut self) {

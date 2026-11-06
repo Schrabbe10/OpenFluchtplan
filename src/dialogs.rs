@@ -299,6 +299,7 @@ impl App {
         if cfg != self.doc().frame_cfg || frame != self.doc().frame || page != self.doc().page {
             let tab = self.tab_mut();
             tab.push_undo();
+            let alt = crate::templates::layout(&tab.doc).plan;
             if frame != tab.doc.frame {
                 crate::ui::apply_frame_defaults(&mut tab.doc, frame);
                 let auto = tab.doc.frame_cfg.clone();
@@ -313,6 +314,12 @@ impl App {
             tab.doc.frame_cfg = cfg;
             tab.doc.frame = frame;
             tab.doc.page = page;
+            // Inhalt mitnehmen, z. B. beim Wechsel von A3 auf A4
+            if let Some(f) = crate::templates::inhalt_umsetzen(&mut tab.doc, alt) {
+                tab.fit = true;
+                let n = tab.doc.scale_n;
+                self.status = format!("Planinhalt an den neuen Planbereich angepasst ({:.0} %), Maßstab jetzt 1:{n}.", f * 100.0);
+            }
         }
         if logo_import {
             self.import_dialog("logo");
@@ -546,7 +553,7 @@ impl App {
                 ui.radio_value(&mut o.vector, false, "Als Bild (z. B. für gescannte Pläne)");
                 if o.vector {
                     ui.checkbox(&mut o.group, "Alles in eine Gruppe zusammenfassen");
-                    ui.add_enabled(!o.group, egui::Checkbox::new(&mut o.symbols, "Symbole erkennen (Einzelteile eines Symbols als Gruppe)"));
+                    ui.add_enabled(!o.group, egui::Checkbox::new(&mut o.symbols, "Symbole erkennen (durch Normzeichen ersetzen, Legende ergänzen)"));
                     ui.add(egui::DragValue::new(&mut o.text_pct).range(10.0..=400.0).speed(1.0).prefix("Texte skalieren ").suffix(" %"));
                     ui.label(RichText::new("Skalierung:").strong());
                     ui.radio_value(&mut o.fit, PdfFit::Einpassen, "In die Planfläche einpassen");
@@ -560,6 +567,7 @@ impl App {
             self.dlg.pdf_pages = if open { Some(auswahl.clone()) } else { None };
             if go {
                 self.dlg.pdf_pages = None;
+                self.import_ziel(&auswahl.name);
                 if self.dlg.pdf_opt.vector {
                     self.import_pdf_vector(&auswahl.bytes, page);
                 } else {

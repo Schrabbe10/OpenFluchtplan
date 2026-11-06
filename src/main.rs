@@ -6,6 +6,7 @@ mod plattform;
 mod bso;
 mod canvas;
 mod dialogs;
+mod erkennung;
 mod export;
 mod extract;
 mod geom;

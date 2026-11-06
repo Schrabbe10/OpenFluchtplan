@@ -504,3 +504,25 @@ fn externe_aenderung_wird_neu_geladen() {
     h.run_steps(2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Ein zweiter Grundriss-Import landet in einem neuen Tab statt über dem ersten Plan.
+#[test]
+fn import_in_neuen_tab() {
+    let mut h = harness();
+    let png = {
+        let img = image::RgbImage::from_pixel(40, 30, image::Rgb([200, 200, 200]));
+        let mut b = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    let datei = |name: &str| crate::plattform::Datei { zweck: crate::plattform::Zweck::Bild, name: name.into(), pfad: None, bytes: png.clone() };
+    h.state_mut().datei_verarbeiten(datei("eg.png"));
+    assert_eq!(h.state().tabs.len(), 1, "erster Import in den leeren Plan");
+    h.state_mut().datei_verarbeiten(datei("og.png"));
+    let app = h.state();
+    assert_eq!(app.tabs.len(), 2, "zweiter Import in neuen Tab");
+    assert_eq!(app.active, 1);
+    assert_eq!(app.tabs[1].doc.objects.len(), 1);
+    assert_eq!(app.tabs[0].doc.objects.len(), 1);
+    assert_eq!(app.tabs[1].name.as_deref(), Some("og"));
+}

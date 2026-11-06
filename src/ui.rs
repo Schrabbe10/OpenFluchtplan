@@ -745,7 +745,7 @@ impl App {
                     self.ungroup();
                 }
                 if self
-                    .small(ui, "symbole_erkennen", "Symbole erkennen", Opt::default(), "Einzelteile importierter Symbole (Hintergrund, Rahmen, Zeichen, Text) zu je einer Gruppe zusammenfassen – in der Auswahl oder, ohne Auswahl, im ganzen Plan")
+                    .small(ui, "symbole_erkennen", "Symbole erkennen", Opt::default(), "Importierte Symbole erkennen und durch die Normzeichen der Bibliothek ersetzen (Legende wird ergänzt); nicht erkannte Symbole werden zu Gruppen zusammengefasst – in der Auswahl oder, ohne Auswahl, im ganzen Plan")
                     .clicked()
                 {
                     self.symbole_erkennen();

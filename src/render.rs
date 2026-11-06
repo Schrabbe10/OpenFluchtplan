@@ -285,6 +285,30 @@ fn dimension_prims(out: &mut Prims, doc: &Doc, a: Pos, b: Pos, offset: f32, colo
     out.push(Prim::Text { pos: mid, text: label, size: 2.8, color, align: TAlign::Mitte, bold: false, italic: false, rot: ang });
 }
 
+/// Spaltenzahl und Schriftgröße, mit denen alle Legendeneinträge in das Feld passen: erst mehr
+/// Spalten, dann kleinere Schrift (bis etwa 60 %, darunter wird es unleserlich).
+pub fn legend_fit(doc: &Doc, bb: BBox, u: f32) -> (u32, f32) {
+    let used: Vec<String> = ops::used_legend_keys(doc).into_iter().map(|(k, _)| k).collect();
+    let n = doc.legend.entries.iter().filter(|e| e.visible && used.contains(&e.key)).count().max(1);
+    let langs = doc.legend.langs.len() as f32;
+    let breit = bb.w() > bb.h() * 2.0;
+    let grund = if breit { ((bb.w() / (70.0 * u)).floor() as u32).max(1) } else { 1 };
+    let mut size = 3.4 * u;
+    let min = 3.4 * u * 0.6;
+    loop {
+        let row_h = (size * 2.2).max(size * (1.3 + 1.15 * langs));
+        let y0 = bb.min.y + size * 0.8 * 0.6 + size * 2.4;
+        let rows = (((bb.max.y - y0) / row_h).floor() as usize).max(1);
+        // Spaltenbreite: Zeichen plus etwa 22 Zeichen Text
+        let max_cols = (((bb.w() - size * 0.8) / (size * 16.0)).floor() as u32).max(1);
+        let noetig = n.div_ceil(rows) as u32;
+        if noetig <= max_cols || size <= min {
+            return (noetig.max(grund).min(max_cols.max(grund)), size);
+        }
+        size = (size * 0.92).max(min);
+    }
+}
+
 /// Legende in ein Rechteck setzen (mehrspaltig, optional mehrsprachig).
 pub fn legend_prims(out: &mut Prims, doc: &Doc, a: Pos, b: Pos, cols: u32, size: f32, with_title: bool) {
     let bb = BBox::from_two(a, b);
