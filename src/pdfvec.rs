@@ -534,6 +534,9 @@ pub fn place(doc: &mut Doc, pg: PdfPage, opt: PdfImportOpt) -> Vec<u64> {
         doc.objects.extend(objs);
         if opt.symbols {
             ops::symbole_zusammenfassen(doc, &ids, SYMBOL_MAX_MM * f.max(0.05));
+            // erkannte Zeichen durch die Normzeichen der Bibliothek ersetzen (Legende, Prüfung)
+            let neu: Vec<u64> = doc.objects[start..].iter().map(|o| o.id).collect();
+            crate::erkennung::normzeichen_einsetzen(doc, Some(&neu));
             return doc.objects[start..].iter().map(|o| o.id).collect();
         }
         ids

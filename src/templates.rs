@@ -70,7 +70,8 @@ pub fn layout(doc: &Doc) -> Layout {
                 }
                 l.kopf = Some(b(w - m - (w - m - px) * 0.45, bottom, w - m, h - m));
             } else {
-                let band = 75.0 * u;
+                // Hochformat: Band unten etwas höher, damit die Verhaltensregeln Platz haben
+                let band = if cfg.show_rules && !brand { 88.0 } else { 75.0 } * u;
                 let by = h - m - band;
                 l.plan = b(m, top, w - m, by - gap);
                 let cw = (w - 2.0 * m - 2.0 * gap) / 3.0;
@@ -115,6 +116,28 @@ pub fn layout(doc: &Doc) -> Layout {
         }
     }
     l
+}
+
+/// Planinhalt nach einem Wechsel von Format oder Rahmen in den neuen Planbereich übertragen
+/// (gleichmäßig skaliert, mittig). Der Maßstab wird entsprechend angepasst. Liefert den Faktor.
+pub fn inhalt_umsetzen(doc: &mut Doc, alt: BBox) -> Option<f32> {
+    let neu = layout(doc).plan;
+    if doc.objects.is_empty() || alt.w() <= 0.0 || alt.h() <= 0.0 {
+        return None;
+    }
+    let f = (neu.w() / alt.w()).min(neu.h() / alt.h());
+    let ziel = neu.min + Pos::new((neu.w() - alt.w() * f) / 2.0, (neu.h() - alt.h() * f) / 2.0);
+    if (f - 1.0).abs() < 1e-3 && (ziel - alt.min).len() < 0.05 {
+        return None;
+    }
+    for o in &mut doc.objects {
+        crate::ops::scale(&mut o.kind, alt.min, f);
+        crate::ops::translate(&mut o.kind, ziel - alt.min);
+    }
+    if doc.scale_n > 0.0 {
+        doc.scale_n = (doc.scale_n / f).round().max(1.0);
+    }
+    Some(f)
 }
 
 fn white_box(out: &mut Prims, bb: BBox, line_w: f32) {
@@ -188,6 +211,11 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
 
     if let Some(rb) = l.rules {
         white_box(&mut out, rb, 0.4);
+        // Schrift verkleinern, wenn das Feld (z. B. bei A4 hoch) nicht für alle Regeln reicht
+        let zeilen = (REGELN_BRAND.len() + REGELN_UNFALL.len()) as f32;
+        let bedarf = (3.0 + 7.0 + 3.0 + 7.0 + 2.0) * u + zeilen * 3.2 * u * 1.5;
+        let k = (rb.h() / bedarf).min(1.0);
+        let u = u * k;
         let s = 3.2 * u;
         let mut y = rb.min.y + 3.0 * u;
         let x = rb.min.x + 3.0 * u;
@@ -212,8 +240,8 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
     }
     if let Some(lb) = l.legend {
         white_box(&mut out, lb, 0.4);
-        let cols = if lb.w() > lb.h() * 2.0 { ((lb.w() / (70.0 * u)).floor() as u32).max(1) } else { 1 };
-        legend_prims(&mut out, doc, lb.min, lb.max, cols, 3.4 * u, true);
+        let (cols, size) = crate::render::legend_fit(doc, lb, u);
+        legend_prims(&mut out, doc, lb.min, lb.max, cols, size, true);
     }
     if let Some(sb) = l.sammel {
         white_box(&mut out, sb, 0.4);

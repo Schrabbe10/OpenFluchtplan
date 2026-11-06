@@ -369,3 +369,49 @@ fn schnittstelle_werkzeuge() {
     assert!(std::fs::metadata(&pdf).unwrap().len() > 1000);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+#[ignore = "Sichtprüfung"]
+fn a4_rahmen_als_bild() {
+    let Ok(dir) = std::env::var("FLUCHTPLAN_TESTBILD") else { return };
+    for (name, ls) in [("a4_quer", true), ("a4_hoch", false), ("a3_quer", true)] {
+        let mut d = crate::samples::flucht_rettungsplan();
+        if name.starts_with("a4") {
+            let alt = crate::templates::layout(&d).plan;
+            d.page = Page { format: PaperFormat::A4, landscape: ls };
+            crate::templates::inhalt_umsetzen(&mut d, alt);
+        }
+        let png = crate::export::render_png(&d, 100.0).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join(format!("{name}.png")), png).unwrap();
+        for (s, t) in crate::pruefung::pruefen(&d) {
+            println!("{name} {s:?} {t}");
+        }
+    }
+}
+
+/// Wechsel A3 → A4: Inhalt liegt danach im neuen Planbereich, Maßstab angepasst, Legende vollständig.
+#[test]
+fn formatwechsel_auf_a4() {
+    for ls in [true, false] {
+        let mut d = crate::samples::flucht_rettungsplan();
+        let alt = crate::templates::layout(&d).plan;
+        d.page = Page { format: PaperFormat::A4, landscape: ls };
+        let f = crate::templates::inhalt_umsetzen(&mut d, alt).unwrap();
+        assert!(f < 1.0);
+        assert!((d.scale_n - (100.0 / f).round()).abs() < 0.5);
+        let neu = crate::templates::layout(&d).plan.expand(0.5);
+        for o in &d.objects {
+            let b = crate::ops::bounds_doc(&d, &o.kind);
+            assert!(neu.contains(b.min) && neu.contains(b.max), "{} außerhalb des Planbereichs", crate::ops::kind_name(&o.kind));
+        }
+        // alle Legendeneinträge passen ins Feld
+        let l = crate::templates::layout(&d);
+        let lb = l.legend.unwrap();
+        let u = 210.0 / 297.0;
+        let (cols, size) = crate::render::legend_fit(&d, lb, u);
+        let n = crate::ops::used_legend_keys(&d).len();
+        let row_h = size * 2.2;
+        let rows = ((lb.max.y - (lb.min.y + size * 0.48 + size * 2.4)) / row_h).floor() as usize;
+        assert!(rows * cols as usize >= n, "Legende passt nicht: {rows} Zeilen × {cols} Spalten für {n} Einträge");
+    }
+}
