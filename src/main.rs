@@ -9,6 +9,7 @@ mod dialogs;
 mod export;
 mod extract;
 mod geom;
+mod icons;
 mod i18n;
 mod import;
 mod model;

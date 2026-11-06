@@ -401,6 +401,7 @@ pub struct App {
     pub draft: Vec<Pos>,
     pub drag: Option<Drag>,
     pub textures: Textures,
+    pub icons: crate::icons::Icons,
     pub settings: Settings,
     pub clipboard: Vec<Obj>,
     pub ribbon: usize,
@@ -420,6 +421,7 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::canvas::install_fonts(&cc.egui_ctx);
+        crate::ui::apply_theme(&cc.egui_ctx);
         plattform::init(&cc.egui_ctx);
         let settings = Settings::load();
         let mut textures = Textures::default();
@@ -433,6 +435,7 @@ impl App {
             draft: Vec::new(),
             drag: None,
             textures,
+            icons: Default::default(),
             dlg: Dialogs {
                 welcome: settings.show_welcome,
                 multicopy_n: 3,

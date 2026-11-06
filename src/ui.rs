@@ -1,6 +1,6 @@
 //! Oberfläche: Menüband, Seitenleisten, Statusleiste, Tastenkürzel.
 
-use eframe::egui::{self, Color32, RichText, Sense, Vec2};
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, Response, RichText, Sense, Stroke, Vec2, WidgetInfo};
 
 use crate::app::{App, Tool};
 use crate::canvas::{self, c32};
@@ -12,18 +12,124 @@ use crate::{ops, presets};
 
 const RIBBON_TABS: [&str; 6] = ["Datei", "Plan", "Einfügen", "Bearbeiten", "Ansicht", "Extras"];
 
-fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::group(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
-        ui.vertical(|ui| {
-            // feste Höchstbreite: große Gruppen brechen intern um, statt das Menüband aufzublähen
-            ui.set_max_width(520.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(3.0, 3.0);
-                add(ui);
-            });
-            ui.label(RichText::new(title).small().weak());
-        });
+// ---------- Farben und Maße des Menübands (an die Windows-Oberfläche angelehnt) ----------
+
+pub const AKZENT: Color32 = Color32::from_rgb(15, 108, 189);
+const HOVER: Color32 = Color32::from_rgb(235, 235, 235);
+const GEDRUECKT: Color32 = Color32::from_rgb(222, 222, 222);
+const AKTIV: Color32 = Color32::from_rgb(214, 231, 247);
+const AKTIV_RAND: Color32 = Color32::from_rgb(143, 190, 232);
+const TRENNER: Color32 = Color32::from_rgb(222, 222, 222);
+const GRUPPENTITEL: Color32 = Color32::from_rgb(110, 110, 110);
+const GESPERRT: Color32 = Color32::from_rgb(165, 165, 165);
+pub const BAND_HINTERGRUND: Color32 = Color32::from_rgb(250, 250, 250);
+
+/// Höhe des Inhalts einer Gruppe (große Schaltfläche bzw. drei kleine übereinander)
+const INHALT_H: f32 = 70.0;
+const KLEIN_H: f32 = 22.0;
+
+/// Helles, ruhiges Erscheinungsbild für die ganze Anwendung.
+pub fn apply_theme(ctx: &egui::Context) {
+    ctx.set_theme(egui::Theme::Light);
+    ctx.style_mut_of(egui::Theme::Light, |s| {
+        let v = &mut s.visuals;
+        v.panel_fill = Color32::from_rgb(243, 243, 243);
+        v.window_fill = Color32::WHITE;
+        v.extreme_bg_color = Color32::WHITE;
+        v.faint_bg_color = Color32::from_rgb(248, 248, 248);
+        v.window_corner_radius = egui::CornerRadius::same(8);
+        v.menu_corner_radius = egui::CornerRadius::same(6);
+        v.window_stroke = Stroke::new(1.0, Color32::from_rgb(210, 210, 210));
+        v.selection.bg_fill = AKTIV;
+        v.selection.stroke = Stroke::new(1.0, AKZENT);
+        v.hyperlink_color = AKZENT;
+        let r = egui::CornerRadius::same(4);
+        for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+            w.corner_radius = r;
+        }
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(224, 224, 224));
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(36, 36, 36));
+        v.widgets.inactive.bg_fill = Color32::WHITE;
+        v.widgets.inactive.weak_bg_fill = Color32::WHITE;
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(209, 209, 209));
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(36, 36, 36));
+        v.widgets.hovered.bg_fill = Color32::from_rgb(245, 245, 245);
+        v.widgets.hovered.weak_bg_fill = HOVER;
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(190, 190, 190));
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+        v.widgets.active.bg_fill = GEDRUECKT;
+        v.widgets.active.weak_bg_fill = GEDRUECKT;
+        v.widgets.active.bg_stroke = Stroke::new(1.0, AKZENT);
+        v.widgets.open.weak_bg_fill = AKTIV;
+        s.spacing.button_padding = Vec2::new(8.0, 3.0);
+        s.spacing.item_spacing = Vec2::new(6.0, 4.0);
+        s.spacing.interact_size.y = 22.0;
+        use egui::TextStyle::*;
+        s.text_styles.insert(Body, FontId::proportional(13.0));
+        s.text_styles.insert(Button, FontId::proportional(13.0));
+        s.text_styles.insert(Small, FontId::proportional(10.5));
+        s.text_styles.insert(Heading, FontId::proportional(19.0));
     });
+}
+
+#[derive(Clone, Copy, Default)]
+struct Opt {
+    selected: bool,
+    disabled: bool,
+    menu: bool,
+    icon_only: bool,
+}
+impl Opt {
+    fn menu() -> Self {
+        Self { menu: true, ..Self::default() }
+    }
+    fn sel(selected: bool) -> Self {
+        Self { selected, ..Self::default() }
+    }
+    fn enabled(enabled: bool) -> Self {
+        Self { disabled: !enabled, ..Self::default() }
+    }
+}
+
+/// Gruppe im Menüband: Inhalt, darunter der Titel, rechts eine feine Trennlinie.
+fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let inner = ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+        let content = ui.horizontal_top(|ui| {
+            ui.set_min_height(INHALT_H);
+            ui.spacing_mut().item_spacing = Vec2::new(2.0, 1.0);
+            add(ui);
+        });
+        let font = FontId::proportional(11.0);
+        let galley = ui.painter().layout_no_wrap(title.to_string(), font, GRUPPENTITEL);
+        let w = content.response.rect.width().max(galley.size().x + 8.0);
+        let (r, _) = ui.allocate_exact_size(Vec2::new(w, 16.0), Sense::hover());
+        ui.painter().galley(Pos2::new(r.center().x - galley.size().x / 2.0, r.min.y + 1.0), galley, GRUPPENTITEL);
+    });
+    let h = inner.response.rect.height();
+    let (r, _) = ui.allocate_exact_size(Vec2::new(11.0, h), Sense::hover());
+    ui.painter().vline(r.center().x, (r.min.y + 4.0)..=(r.max.y - 4.0), Stroke::new(1.0, TRENNER));
+}
+
+/// Spalte mit bis zu drei kleinen Schaltflächen übereinander.
+fn col(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(2.0, 1.0);
+        add(ui);
+    });
+}
+
+/// Zeile innerhalb einer Spalte (für Auswahllisten und Zahlenfelder).
+fn row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(Vec2::new(0.0, KLEIN_H + 1.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+        ui.spacing_mut().interact_size.y = 20.0;
+        add(ui);
+    });
+}
+
+fn chevron(p: &egui::Painter, c: Pos2, col: Color32) {
+    p.add(egui::Shape::convex_polygon(vec![Pos2::new(c.x - 3.0, c.y - 1.5), Pos2::new(c.x + 3.0, c.y - 1.5), Pos2::new(c.x, c.y + 1.8)], col, Stroke::NONE));
 }
 
 pub fn from_c32(c: Color32) -> Color {
@@ -41,38 +147,164 @@ fn color_edit(ui: &mut egui::Ui, c: &mut Color) -> bool {
 }
 
 impl App {
-    fn tool_btn(&mut self, ui: &mut egui::Ui, label: &str, tool: Tool, tip: &str) {
-        let active = self.tool == tool;
-        if ui.selectable_label(active, label).on_hover_text(tip).clicked() {
-            self.draft.clear();
-            self.measure = None;
-            self.tool = if active { Tool::Select } else { tool };
+    /// Schaltfläche des Menübands: groß (Symbol über Text) oder klein (Symbol neben Text).
+    fn rb(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, big: bool, o: Opt, tip: &str) -> Response {
+        let txt = if o.disabled { GESPERRT } else { Color32::from_rgb(36, 36, 36) };
+        let font = FontId::proportional(12.5);
+        let (size, galley) = if big {
+            // große Schaltflächen ohne Auslassungspunkte (wie in Office)
+            let shown = label.trim_end_matches('…').trim_end();
+            // Umbruch nur zwischen Wörtern; lange Wörter verbreitern die Schaltfläche
+            let longest = shown.split(' ').map(|w| ui.painter().layout_no_wrap(w.to_string(), font.clone(), txt).size().x).fold(0.0_f32, f32::max);
+            let mut job = egui::text::LayoutJob::simple(shown.to_string(), font, txt, longest.max(78.0) + 1.0);
+            job.wrap.max_rows = 2;
+            job.wrap.break_anywhere = false;
+            job.halign = egui::Align::Center;
+            let g = ui.painter().layout_job(job);
+            (Vec2::new((g.size().x + 14.0).max(48.0), INHALT_H), Some(g))
+        } else if o.icon_only {
+            (Vec2::new(if o.menu { 34.0 } else { 26.0 }, KLEIN_H), None)
+        } else {
+            let g = ui.painter().layout_no_wrap(label.to_string(), font, txt);
+            (Vec2::new(g.size().x + 32.0 + if o.menu { 12.0 } else { 0.0 }, KLEIN_H), Some(g))
+        };
+        let sense = if o.disabled { Sense::hover() } else { Sense::click() };
+        let (rect, resp) = ui.allocate_exact_size(size, sense);
+        if ui.is_rect_visible(rect) {
+            let p = ui.painter();
+            let open = o.menu && egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+            let (fill, stroke) = if o.disabled {
+                (Color32::TRANSPARENT, Stroke::NONE)
+            } else if resp.is_pointer_button_down_on() {
+                (GEDRUECKT, Stroke::NONE)
+            } else if o.selected || open {
+                (AKTIV, Stroke::new(1.0, AKTIV_RAND))
+            } else if resp.hovered() {
+                (HOVER, Stroke::NONE)
+            } else {
+                (Color32::TRANSPARENT, Stroke::NONE)
+            };
+            p.rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
+            let tint = if o.disabled { Color32::from_white_alpha(90) } else { Color32::WHITE };
+            let isz = if big { 32.0 } else { 16.0 };
+            let irect = if big {
+                Rect::from_min_size(Pos2::new(rect.center().x - isz / 2.0, rect.min.y + 6.0), Vec2::splat(isz))
+            } else {
+                Rect::from_min_size(Pos2::new(rect.min.x + 5.0, rect.center().y - isz / 2.0), Vec2::splat(isz))
+            };
+            if let Some(t) = self.icons.get(ui.ctx(), icon, isz) {
+                ui.painter().image(t.id(), irect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+            }
+            let p = ui.painter();
+            if let Some(g) = galley {
+                if big {
+                    let y = rect.min.y + 42.0;
+                    p.galley(Pos2::new(rect.center().x, y), g.clone(), txt);
+                    if o.menu {
+                        let lines = g.rows.len().max(1) as f32;
+                        chevron(p, Pos2::new(rect.center().x, (y + lines * 14.5 + 4.0).min(rect.max.y - 4.0)), txt);
+                    }
+                } else {
+                    p.galley(Pos2::new(rect.min.x + 26.0, rect.center().y - g.size().y / 2.0), g, txt);
+                    if o.menu {
+                        chevron(p, Pos2::new(rect.max.x - 9.0, rect.center().y), txt);
+                    }
+                }
+            } else if o.menu {
+                chevron(p, Pos2::new(rect.max.x - 8.0, rect.center().y), txt);
+            }
+        }
+        let enabled = !o.disabled;
+        let selected = o.selected;
+        resp.widget_info(|| WidgetInfo::selected(egui::Role::Button, enabled, selected, label));
+        let tip = if !tip.is_empty() { tip.to_string() } else if o.icon_only || label.contains('\n') { label.to_string() } else { String::new() };
+        if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+    }
+
+    fn big(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, o: Opt, tip: &str) -> Response {
+        self.rb(ui, icon, label, true, o, tip)
+    }
+    fn small(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, o: Opt, tip: &str) -> Response {
+        self.rb(ui, icon, label, false, o, tip)
+    }
+    fn tiny(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, mut o: Opt, tip: &str) -> Response {
+        o.icon_only = true;
+        self.rb(ui, icon, label, false, o, tip)
+    }
+
+    fn set_tool(&mut self, tool: Tool) {
+        self.draft.clear();
+        self.measure = None;
+        self.tool = if self.tool == tool { Tool::Select } else { tool };
+    }
+
+    fn tool_rb(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, tool: Tool, tip: &str, size: u8) {
+        let o = Opt::sel(self.tool == tool);
+        let r = match size {
+            2 => self.big(ui, icon, label, o, tip),
+            1 => self.small(ui, icon, label, o, tip),
+            _ => self.tiny(ui, icon, label, o, tip),
+        };
+        if r.clicked() {
+            self.set_tool(tool);
         }
     }
 
+    /// Umschalter (Häkchen-Ersatz) als kleine Schaltfläche.
+    fn toggle(&mut self, ui: &mut egui::Ui, icon: &'static str, label: &str, v: &mut bool, tip: &str) -> bool {
+        if self.small(ui, icon, label, Opt::sel(*v), tip).clicked() {
+            *v = !*v;
+            return true;
+        }
+        false
+    }
+
     pub fn ribbon(&mut self, ui: &mut egui::Ui) {
+        // Reiterzeile
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(4.0);
             for (i, t) in RIBBON_TABS.iter().enumerate() {
-                if ui.selectable_label(self.ribbon == i, RichText::new(*t).strong()).clicked() {
+                let active = self.ribbon == i;
+                let font = FontId::proportional(13.5);
+                let col = if active { AKZENT } else { Color32::from_rgb(50, 50, 50) };
+                let galley = ui.painter().layout_no_wrap(t.to_string(), font, col);
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(galley.size().x + 22.0, 30.0), Sense::click());
+                if resp.hovered() && !active {
+                    ui.painter().rect_filled(rect.shrink2(Vec2::new(0.0, 3.0)), 4.0, HOVER);
+                }
+                let gw = galley.size().x;
+                ui.painter().galley(Pos2::new(rect.center().x - gw / 2.0, rect.center().y - galley.size().y / 2.0 - 1.0), galley, col);
+                if active {
+                    let y = rect.max.y - 2.0;
+                    ui.painter().line_segment([Pos2::new(rect.center().x - gw / 2.0, y), Pos2::new(rect.center().x + gw / 2.0, y)], Stroke::new(3.0, AKZENT));
+                }
+                resp.widget_info(|| WidgetInfo::selected(egui::Role::Button, true, active, *t));
+                if resp.clicked() {
                     self.ribbon = i;
                 }
             }
-            ui.separator();
-            ui.label(RichText::new(format!("Werkzeug: {}", self.tool.name())).color(Color32::from_rgb(0, 90, 160)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("Werkzeug: {}", self.tool.name())).color(GRUPPENTITEL));
+            });
         });
-        ui.add_space(2.0);
-        // Gruppen in einer Zeile; bei schmalem Fenster waagerecht scrollen (wie Office-Menübänder)
-        egui::ScrollArea::horizontal().id_salt("ribbon").auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_top(|ui| match self.ribbon {
-                0 => self.ribbon_datei(ui),
-                1 => self.ribbon_plan(ui),
-                2 => self.ribbon_einfuegen(ui),
-                3 => self.ribbon_bearbeiten(ui),
-                4 => self.ribbon_ansicht(ui),
-                _ => self.ribbon_extras(ui),
+        // Band mit den Gruppen; bei schmalem Fenster waagerecht scrollen (wie Office-Menübänder)
+        egui::Frame::new().fill(BAND_HINTERGRUND).stroke(Stroke::new(1.0, TRENNER)).corner_radius(6.0).inner_margin(egui::Margin { left: 6, right: 6, top: 4, bottom: 2 }).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            egui::ScrollArea::horizontal().id_salt("ribbon").auto_shrink([false, true]).show(ui, |ui| {
+                ui.horizontal_top(|ui| match self.ribbon {
+                    0 => self.ribbon_datei(ui),
+                    1 => self.ribbon_plan(ui),
+                    2 => self.ribbon_einfuegen(ui),
+                    3 => self.ribbon_bearbeiten(ui),
+                    4 => self.ribbon_ansicht(ui),
+                    _ => self.ribbon_extras(ui),
+                });
             });
         });
     }
+
 
     pub fn new_menu(&mut self, ui: &mut egui::Ui) {
         let items: [(&str, FrameKind, PaperFormat, bool); 10] = [
@@ -95,123 +327,148 @@ impl App {
         }
     }
 
-    fn ribbon_datei(&mut self, ui: &mut egui::Ui) {
-        group(ui, "Plan", |ui| {
-            ui.menu_button("Neu", |ui| self.new_menu(ui));
-            if ui.button("Öffnen …").clicked() {
-                self.open_dialog();
+
+    fn recent_menu(&mut self, ui: &mut egui::Ui) {
+        let recent = self.settings.recent.clone();
+        if recent.is_empty() {
+            ui.label("Noch keine.");
+        }
+        for p in recent {
+            if ui.button(p.display().to_string()).clicked() {
+                self.open_path(&p);
+                ui.close();
             }
-            if ui.button("Speichern").clicked() {
-                self.save(false);
-            }
-            if ui.button("Speichern unter …").clicked() {
-                self.save(true);
-            }
-            if ui.button("Schließen").clicked() {
-                self.close_tab(self.active, false);
-            }
-        });
-        group(ui, "Zuletzt geöffnet", |ui| {
-            let recent = self.settings.recent.clone();
-            ui.menu_button("Letzte Pläne …", |ui| {
-                if recent.is_empty() {
-                    ui.label("Noch keine.");
-                }
-                for p in recent {
-                    if ui.button(p.display().to_string()).clicked() {
-                        self.open_path(&p);
-                        ui.close();
-                    }
-                }
-            });
-            if ui.button("Musterpläne …").clicked() {
-                self.dlg.samples = true;
-            }
-            if ui.button("Willkommen …").clicked() {
-                self.dlg.welcome = true;
-            }
-        });
-        group(ui, "Ausgabe", |ui| {
-            if ui.button("Drucken").on_hover_text("Öffnet den Plan als PDF in der Druckvorschau").clicked() {
-                self.print();
-            }
-            self.pdf_menu(ui);
-        });
-        group(ui, "Programm", |ui| {
-            if ui.button("Beenden").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        });
+        }
     }
 
-    fn pdf_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("PDF erstellen …", |ui| {
-            if ui.button("Erstellen").clicked() {
-                self.export_pdf(Stamp::Keiner);
+    fn import_menu(&mut self, ui: &mut egui::Ui) {
+        for (k, n) in [("bild", "Grundriss als Bild (PNG/JPG/BMP/TIF) …"), ("pdf", "Grundriss aus PDF …"), ("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("plan", "Anderen Plan einfügen …"), ("svg", "Eigenes Symbol (SVG) …")] {
+            // DWG braucht ein externes Programm – nur Desktop
+            if k == "dwg" && crate::plattform::IST_WEB {
+                continue;
+            }
+            if ui.button(n).clicked() {
+                self.import_dialog(k);
                 ui.close();
             }
-            if ui.button("Entwurf erstellen (Überdruck ENTWURF)").clicked() {
-                self.export_pdf(Stamp::Entwurf);
+        }
+    }
+
+    fn export_menu(&mut self, ui: &mut egui::Ui) {
+        for (k, n) in [("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("svg", "SVG-Vektorgrafik …")] {
+            if k == "dwg" && crate::plattform::IST_WEB {
+                continue;
+            }
+            if ui.button(n).clicked() {
+                self.export_other(k);
                 ui.close();
             }
-            if ui.button("Muster erstellen (Überdruck MUSTER)").clicked() {
-                self.export_pdf(Stamp::Muster);
-                ui.close();
+        }
+        if ui.button("PNG-Bild …").clicked() {
+            self.dlg.png = true;
+            ui.close();
+        }
+    }
+
+    fn pdf_menu_items(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Erstellen").clicked() {
+            self.export_pdf(Stamp::Keiner);
+            ui.close();
+        }
+        if ui.button("Entwurf erstellen (Überdruck ENTWURF)").clicked() {
+            self.export_pdf(Stamp::Entwurf);
+            ui.close();
+        }
+        if ui.button("Muster erstellen (Überdruck MUSTER)").clicked() {
+            self.export_pdf(Stamp::Muster);
+            ui.close();
+        }
+        if ui.button("Vorabzug erstellen (Überdruck VORABZUG)").clicked() {
+            self.export_pdf(Stamp::Vorabzug);
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Pläne zusammenführen …").clicked() {
+            self.dlg.merge = true;
+            self.dlg.merge_sel = vec![true; self.tabs.len()];
+            ui.close();
+        }
+    }
+
+    fn pdf_menu(&mut self, ui: &mut egui::Ui, big: bool) {
+        let r = self.rb(ui, "pdf", "PDF erstellen …", big, Opt::menu(), "PDF erstellen, mit oder ohne Überdruck");
+        egui::Popup::menu(&r).show(|ui| self.pdf_menu_items(ui));
+    }
+
+    fn ribbon_datei(&mut self, ui: &mut egui::Ui) {
+        group(ui, "Plan", |ui| {
+            let r = self.big(ui, "neu", "Neu", Opt::menu(), "Neuen Plan anlegen");
+            egui::Popup::menu(&r).show(|ui| self.new_menu(ui));
+            if self.big(ui, "oeffnen", "Öffnen …", Opt::default(), "Gespeicherten Plan öffnen").clicked() {
+                self.open_dialog();
             }
-            if ui.button("Vorabzug erstellen (Überdruck VORABZUG)").clicked() {
-                self.export_pdf(Stamp::Vorabzug);
-                ui.close();
+            if self.big(ui, "speichern", "Speichern", Opt::default(), "Plan speichern (Strg+S)").clicked() {
+                self.save(false);
             }
-            ui.separator();
-            if ui.button("Pläne zusammenführen …").clicked() {
-                self.dlg.merge = true;
-                self.dlg.merge_sel = vec![true; self.tabs.len()];
-                ui.close();
-            }
+            col(ui, |ui| {
+                if self.small(ui, "speichern_unter", "Speichern unter …", Opt::default(), "").clicked() {
+                    self.save(true);
+                }
+                if self.small(ui, "schliessen", "Schließen", Opt::default(), "Aktuellen Plan schließen").clicked() {
+                    self.close_tab(self.active, false);
+                }
+            });
         });
+        group(ui, "Zuletzt geöffnet", |ui| {
+            col(ui, |ui| {
+                let r = self.small(ui, "zuletzt", "Letzte Pläne …", Opt::menu(), "");
+                egui::Popup::menu(&r).show(|ui| self.recent_menu(ui));
+                if self.small(ui, "muster", "Musterpläne …", Opt::default(), "").clicked() {
+                    self.dlg.samples = true;
+                }
+                if self.small(ui, "willkommen", "Willkommen …", Opt::default(), "").clicked() {
+                    self.dlg.welcome = true;
+                }
+            });
+        });
+        group(ui, "Ausgabe", |ui| {
+            if self.big(ui, "drucken", "Drucken", Opt::default(), "Öffnet den Plan als PDF in der Druckvorschau").clicked() {
+                self.print();
+            }
+            self.pdf_menu(ui, true);
+        });
+        if !crate::plattform::IST_WEB {
+            group(ui, "Programm", |ui| {
+                if self.big(ui, "beenden", "Beenden", Opt::default(), "").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        }
     }
 
     fn ribbon_plan(&mut self, ui: &mut egui::Ui) {
         group(ui, "Plan", |ui| {
-            ui.menu_button("Neu", |ui| self.new_menu(ui));
-            if ui.button("Öffnen").clicked() {
-                self.open_dialog();
-            }
-            if ui.button("Speichern").clicked() {
-                self.save(false);
-            }
-            ui.menu_button("Importieren …", |ui| {
-                for (k, n) in [("bild", "Grundriss als Bild (PNG/JPG/BMP/TIF) …"), ("pdf", "Grundriss aus PDF …"), ("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("plan", "Anderen Plan einfügen …"), ("svg", "Eigenes Symbol (SVG) …")] {
-                    // DWG braucht ein externes Programm – nur Desktop
-                    if k == "dwg" && crate::plattform::IST_WEB {
-                        continue;
-                    }
-                    if ui.button(n).clicked() {
-                        self.import_dialog(k);
-                        ui.close();
-                    }
+            let r = self.big(ui, "neu", "Neu", Opt::menu(), "Neuen Plan anlegen");
+            egui::Popup::menu(&r).show(|ui| self.new_menu(ui));
+            col(ui, |ui| {
+                if self.small(ui, "oeffnen", "Öffnen", Opt::default(), "").clicked() {
+                    self.open_dialog();
+                }
+                if self.small(ui, "speichern", "Speichern", Opt::default(), "").clicked() {
+                    self.save(false);
+                }
+                if self.small(ui, "drucken", "Drucken", Opt::default(), "Öffnet den Plan als PDF in der Druckvorschau").clicked() {
+                    self.print();
                 }
             });
-            ui.menu_button("Exportieren …", |ui| {
-                for (k, n) in [("dxf", "AutoCAD DXF …"), ("dwg", "AutoCAD DWG … (ODA File Converter)"), ("svg", "SVG-Vektorgrafik …")] {
-                    if k == "dwg" && crate::plattform::IST_WEB {
-                        continue;
-                    }
-                    if ui.button(n).clicked() {
-                        self.export_other(k);
-                        ui.close();
-                    }
-                }
-                if ui.button("PNG-Bild …").clicked() {
-                    self.dlg.png = true;
-                    ui.close();
-                }
+            col(ui, |ui| {
+                let r = self.small(ui, "importieren", "Importieren …", Opt::menu(), "Grundriss, CAD-Datei oder Symbol einlesen");
+                egui::Popup::menu(&r).show(|ui| self.import_menu(ui));
+                let r = self.small(ui, "exportieren", "Exportieren …", Opt::menu(), "Als DXF, SVG oder PNG speichern");
+                egui::Popup::menu(&r).show(|ui| self.export_menu(ui));
+                self.pdf_menu(ui, false);
             });
-            if ui.button("Drucken").clicked() {
-                self.print();
-            }
-            self.pdf_menu(ui);
-            if ui.button("Plan prüfen …").on_hover_text("Pflichtinhalte nach DIN ISO 23601 / DIN 14095 prüfen").clicked() {
+            if self.big(ui, "pruefen", "Plan prüfen …", Opt::default(), "Pflichtinhalte nach DIN ISO 23601 / DIN 14095 prüfen").clicked() {
                 self.dlg.check = true;
             }
         });
@@ -219,23 +476,31 @@ impl App {
             let mut page = self.doc().page;
             let mut frame = self.doc().frame;
             let mut scale = self.doc().scale_n;
-            egui::ComboBox::from_id_salt("fmt").selected_text(page.format.name()).show_ui(ui, |ui| {
-                for f in PaperFormat::LISTE {
-                    ui.selectable_value(&mut page.format, f, f.name());
-                }
+            col(ui, |ui| {
+                row(ui, |ui| {
+                    egui::ComboBox::from_id_salt("fmt").width(64.0).selected_text(page.format.name()).show_ui(ui, |ui| {
+                        for f in PaperFormat::LISTE {
+                            ui.selectable_value(&mut page.format, f, f.name());
+                        }
+                    });
+                    if self.tiny(ui, "quer", "Quer", Opt::sel(page.landscape), "Querformat").clicked() {
+                        page.landscape = true;
+                    }
+                    if self.tiny(ui, "hoch", "Hoch", Opt::sel(!page.landscape), "Hochformat").clicked() {
+                        page.landscape = false;
+                    }
+                    ui.label("1:");
+                    ui.add(egui::DragValue::new(&mut scale).range(1.0..=100000.0).speed(5.0)).on_hover_text("Maßstab");
+                });
+                row(ui, |ui| {
+                    egui::ComboBox::from_id_salt("frame").width(214.0).selected_text(frame.name()).show_ui(ui, |ui| {
+                        for f in FrameKind::ALL {
+                            ui.selectable_value(&mut frame, f, f.name());
+                        }
+                    });
+                });
+                self.tool_rb(ui, "massstab_distanz", "Maßstab durch Entfernung", Tool::ScaleByDistance, "Zwei Punkte mit bekanntem Abstand anklicken", 1);
             });
-            ui.selectable_value(&mut page.landscape, true, "Quer");
-            ui.selectable_value(&mut page.landscape, false, "Hoch");
-            egui::ComboBox::from_id_salt("frame").width(220.0).selected_text(frame.name()).show_ui(ui, |ui| {
-                for f in FrameKind::ALL {
-                    ui.selectable_value(&mut frame, f, f.name());
-                }
-            });
-            if ui.button("Rahmen und Titel …").clicked() {
-                self.dlg.page = true;
-            }
-            ui.label("Maßstab 1:");
-            ui.add(egui::DragValue::new(&mut scale).range(1.0..=100000.0).speed(5.0));
             let changed = page != self.doc().page || frame != self.doc().frame || scale != self.doc().scale_n;
             if changed {
                 let tab = self.tab_mut();
@@ -248,108 +513,48 @@ impl App {
                 tab.doc.scale_n = scale;
                 tab.fit = true;
             }
-            self.tool_btn(ui, "Maßstab durch Entfernung", Tool::ScaleByDistance, "Zwei Punkte mit bekanntem Abstand anklicken");
-            if ui.button("Bereinigen").on_hover_text("Leere Elemente und ungenutzte Legendeneinträge entfernen").clicked() {
-                self.cleanup();
+            if self.big(ui, "rahmen", "Rahmen und Titel …", Opt::default(), "Planrahmen, Titel und Angaben").clicked() {
+                self.dlg.page = true;
             }
-            if ui.button("Grundriss extrahieren …").on_hover_text("Wände automatisch aus einem Bild erkennen").clicked() {
-                self.dlg.extract = true;
-            }
-            if ui.button("Legende …").clicked() {
+            if self.big(ui, "legende", "Legende …", Opt::default(), "Legenden-Assistent").clicked() {
                 self.dlg.legend = true;
             }
+            col(ui, |ui| {
+                if self.small(ui, "bereinigen", "Bereinigen", Opt::default(), "Leere Elemente und ungenutzte Legendeneinträge entfernen").clicked() {
+                    self.cleanup();
+                }
+                if self.small(ui, "extrahieren", "Grundriss extrahieren …", Opt::default(), "Wände automatisch aus einem Bild erkennen").clicked() {
+                    self.dlg.extract = true;
+                }
+            });
         });
         group(ui, "Lagerichtig ausrichten", |ui| {
-            for (label, deg) in [("Inhalt −90°", -90.0), ("Inhalt +90°", 90.0), ("Inhalt 180°", 180.0)] {
-                if ui.button(label).on_hover_text("Gesamten Planinhalt um den Planbereich drehen (Standort-Ausrichtung)").clicked() {
-                    self.rotate_content(deg);
+            col(ui, |ui| {
+                for (icon, label, deg) in [("drehen_l", "Inhalt −90°", -90.0), ("drehen_r", "Inhalt +90°", 90.0), ("drehen_180", "Inhalt 180°", 180.0)] {
+                    if self.small(ui, icon, label, Opt::default(), "Gesamten Planinhalt um den Planbereich drehen (Standort-Ausrichtung)").clicked() {
+                        self.rotate_content(deg);
+                    }
                 }
-            }
-            if ui.button("Plan duplizieren").on_hover_text("Kopie für einen weiteren Aushangort (Standort versetzen)").clicked() {
+            });
+            if self.big(ui, "plan_duplizieren", "Plan duplizieren", Opt::default(), "Kopie für einen weiteren Aushangort (Standort versetzen)").clicked() {
                 self.duplicate_plan();
             }
         });
     }
 
     fn ribbon_einfuegen(&mut self, ui: &mut egui::Ui) {
-        group(ui, "Einfügen", |ui| {
-            self.tool_btn(ui, "Legende", Tool::Legend, "Legende als Rahmen aufziehen (wird automatisch befüllt)");
-            if ui.button("Legende …").on_hover_text("Legenden-Assistent").clicked() {
-                self.dlg.legend = true;
-            }
-            if ui.button("Rahmen für Laufkarten").on_hover_text("Planrahmen auf Feuerwehr-Laufkarte (DIN 14675) umstellen").clicked() {
-                let tab = self.tab_mut();
-                tab.push_undo();
-                apply_frame_defaults(&mut tab.doc, FrameKind::Laufkarte);
-                tab.doc.frame = FrameKind::Laufkarte;
-                tab.fit = true;
-            }
-            if ui.button("Rahmen und Titel …").clicked() {
-                self.dlg.page = true;
-            }
-            self.tool_btn(ui, "Container", Tool::Container, "Kasten (z. B. für Textblöcke, Übersichtsplan, Stempelfeld)");
-        });
-        group(ui, "Auswahl und Zoom", |ui| {
-            self.tool_btn(ui, "Auswahl", Tool::Select, "Elemente auswählen und bearbeiten (Esc)");
-            self.tool_btn(ui, "Verschieben", Tool::Pan, "Ansicht verschieben (auch mittlere Maustaste oder Leertaste)");
-            self.tool_btn(ui, "Bereich zoomen", Tool::ZoomBox, "Auf einen Bereich zoomen");
-        });
-        group(ui, "Zeichnen", |ui| {
-            self.tool_btn(ui, "Linie", Tool::Line, "Linie");
-            self.tool_btn(ui, "Kreis", Tool::Circle, "Kreis (Mittelpunkt, Radius)");
-            self.tool_btn(ui, "Ellipse", Tool::Ellipse, "Ellipse");
-            self.tool_btn(ui, "Bogen", Tool::Arc, "Kreisbogen");
-            self.tool_btn(ui, "Rechteck", Tool::Rect, "Rechteck");
-            self.tool_btn(ui, "Polygon", Tool::Polygon, "Geschlossenes Polygon");
-            self.tool_btn(ui, "N-Eck", Tool::NGon, "Regelmäßiges Vieleck");
-            self.tool_btn(ui, "Linienzug", Tool::Polyline, "Offener Linienzug");
-            self.tool_btn(ui, "Schlauch", Tool::Hose, "Schlauchleitung (Doppellinie)");
-            self.tool_btn(ui, "Spline", Tool::Spline, "Kurve durch Punkte");
-            self.tool_btn(ui, "Text", Tool::Text, "Text");
-            if ui.button("Bild").on_hover_text("Bild einfügen").clicked() {
-                self.import_dialog("bild");
-            }
-            if ui.button("Eingebettetes PDF").on_hover_text("PDF-Seite einfügen").clicked() {
-                self.import_dialog("pdf");
-            }
-            self.tool_btn(ui, "Maßlinie", Tool::Dimension, "Bemaßung in Metern (nach Planmaßstab)");
-            if ui.button("Externe Referenz").on_hover_text("Anderen Plan als Gruppe einfügen").clicked() {
-                self.import_dialog("plan");
-            }
-            self.tool_btn(ui, "Tabelle", Tool::Table, "Tabelle");
-            self.tool_btn(ui, "Notiz", Tool::Note, "Notiz (wird nicht gedruckt)");
+        group(ui, "Auswahl", |ui| {
+            self.tool_rb(ui, "auswahl", "Auswahl", Tool::Select, "Elemente auswählen und bearbeiten (Esc)", 2);
+            col(ui, |ui| {
+                self.tool_rb(ui, "verschieben", "Verschieben", Tool::Pan, "Ansicht verschieben (auch mittlere Maustaste oder Leertaste)", 1);
+                self.tool_rb(ui, "zoom_bereich", "Bereich zoomen", Tool::ZoomBox, "Auf einen Bereich zoomen", 1);
+            });
         });
         group(ui, "Bau und Fluchtwege", |ui| {
-            self.tool_btn(ui, "Wand", Tool::Wall, "Wand (Linienzug mit Wandstärke)");
-            self.tool_btn(ui, "Wand (orth.)", Tool::WallOrtho, "Wand – nur waagerecht/senkrecht");
-            self.tool_btn(ui, "Raum", Tool::Room, "Raum mit Bezeichnung");
-            self.tool_btn(ui, "Raummaß", Tool::RoomArea, "Raumfläche (m²) anzeigen");
-            ui.menu_button("Weitere …", |ui| {
-                for (n, t) in [
-                    ("Revisionswolke", Tool::Cloud),
-                    ("Gleis", Tool::Rail),
-                    ("Maßstabsleiste", Tool::ScaleBar),
-                    ("Zaun", Tool::Fence),
-                    ("QR-Code", Tool::Qr),
-                    ("Doppeltür", Tool::DoubleDoor),
-                    ("Hilfslinie", Tool::Guide),
-                ] {
-                    if ui.button(n).clicked() {
-                        self.tool = t;
-                        self.draft.clear();
-                        ui.close();
-                    }
-                }
-                if ui.button("Stuhl / Tisch (Modelle) …").clicked() {
-                    self.lib_tab = 0;
-                    self.lib_cat = Category::ALL.iter().position(|c| *c == Category::Einrichtung).unwrap_or(0);
-                    ui.close();
-                }
-            });
-            self.tool_btn(ui, "Fenster", Tool::Window, "Fenster in Wand");
-            self.tool_btn(ui, "Tür", Tool::Door, "Tür mit Schwenkbereich");
-            self.tool_btn(ui, "Treppe", Tool::Stairs, "Treppe mit Laufrichtung");
-            ui.menu_button("Fluchtwege …", |ui| {
+            self.tool_rb(ui, "wand", "Wand", Tool::Wall, "Wand (Linienzug mit Wandstärke)", 2);
+            self.tool_rb(ui, "tuer", "Tür", Tool::Door, "Tür mit Schwenkbereich", 2);
+            let r = self.big(ui, "fluchtweg", "Fluchtwege …", Opt::menu(), "Fluchtweg, Laufweg oder Fläche zeichnen");
+            egui::Popup::menu(&r).show(|ui| {
                 for (n, t) in [("Fluchtweg (mit Pfeilen)", Tool::Route), ("Fluchtweg (Bogen)", Tool::RouteCurved), ("Laufweg der Feuerwehr (rot)", Tool::Laufweg)] {
                     if ui.button(n).clicked() {
                         self.tool = t;
@@ -366,218 +571,370 @@ impl App {
                     }
                 }
             });
-            self.tool_btn(ui, "Richtungspfeil", Tool::Symbol("PFEIL_GRUEN".into()), "Richtungspfeil Rettungsweg");
-            self.tool_btn(ui, "Planraster", Tool::Grid, "Planraster mit Feldbezeichnungen (A1 …)");
-            self.tool_btn(ui, "Geschoss-Schnitt", Tool::FloorSection, "Geschossübersicht für Feuerwehrpläne (DIN 14095), dargestelltes Geschoss markiert");
+            col(ui, |ui| {
+                self.tool_rb(ui, "wand_ortho", "Wand (orth.)", Tool::WallOrtho, "Wand – nur waagerecht/senkrecht", 1);
+                self.tool_rb(ui, "raum", "Raum", Tool::Room, "Raum mit Bezeichnung", 1);
+                self.tool_rb(ui, "raummass", "Raummaß", Tool::RoomArea, "Raumfläche (m²) anzeigen", 1);
+            });
+            col(ui, |ui| {
+                self.tool_rb(ui, "fenster", "Fenster", Tool::Window, "Fenster in Wand", 1);
+                self.tool_rb(ui, "treppe", "Treppe", Tool::Stairs, "Treppe mit Laufrichtung", 1);
+                self.tool_rb(ui, "pfeil", "Richtungspfeil", Tool::Symbol("PFEIL_GRUEN".into()), "Richtungspfeil Rettungsweg", 1);
+            });
+            col(ui, |ui| {
+                self.tool_rb(ui, "raster", "Planraster", Tool::Grid, "Planraster mit Feldbezeichnungen (A1 …)", 1);
+                self.tool_rb(ui, "geschoss", "Geschoss-Schnitt", Tool::FloorSection, "Geschossübersicht für Feuerwehrpläne (DIN 14095), dargestelltes Geschoss markiert", 1);
+                let r = self.small(ui, "weitere", "Weitere …", Opt::menu(), "Revisionswolke, Gleis, Zaun, QR-Code …");
+                egui::Popup::menu(&r).show(|ui| {
+                    for (n, t) in [
+                        ("Revisionswolke", Tool::Cloud),
+                        ("Gleis", Tool::Rail),
+                        ("Maßstabsleiste", Tool::ScaleBar),
+                        ("Zaun", Tool::Fence),
+                        ("QR-Code", Tool::Qr),
+                        ("Doppeltür", Tool::DoubleDoor),
+                        ("Hilfslinie", Tool::Guide),
+                    ] {
+                        if ui.button(n).clicked() {
+                            self.tool = t;
+                            self.draft.clear();
+                            ui.close();
+                        }
+                    }
+                    if ui.button("Stuhl / Tisch (Modelle) …").clicked() {
+                        self.lib_tab = 0;
+                        self.lib_cat = Category::ALL.iter().position(|c| *c == Category::Einrichtung).unwrap_or(0);
+                        ui.close();
+                    }
+                });
+            });
+        });
+        group(ui, "Formen", |ui| {
+            // Formenkatalog wie in Office: kleine Symbole in drei Reihen
+            let formen: [(&'static str, &str, Tool, &str); 12] = [
+                ("linie", "Linie", Tool::Line, "Linie"),
+                ("rechteck", "Rechteck", Tool::Rect, "Rechteck"),
+                ("kreis", "Kreis", Tool::Circle, "Kreis (Mittelpunkt, Radius)"),
+                ("ellipse", "Ellipse", Tool::Ellipse, "Ellipse"),
+                ("linienzug", "Linienzug", Tool::Polyline, "Offener Linienzug"),
+                ("polygon", "Polygon", Tool::Polygon, "Geschlossenes Polygon"),
+                ("neck", "N-Eck", Tool::NGon, "Regelmäßiges Vieleck"),
+                ("bogen", "Bogen", Tool::Arc, "Kreisbogen"),
+                ("spline", "Spline", Tool::Spline, "Kurve durch Punkte"),
+                ("schlauch", "Schlauch", Tool::Hose, "Schlauchleitung (Doppellinie)"),
+                ("masslinie", "Maßlinie", Tool::Dimension, "Bemaßung in Metern (nach Planmaßstab)"),
+                ("container", "Container", Tool::Container, "Kasten (z. B. für Textblöcke, Übersichtsplan, Stempelfeld)"),
+            ];
+            for spalte in formen.chunks(3) {
+                col(ui, |ui| {
+                    for (icon, label, tool, tip) in spalte {
+                        self.tool_rb(ui, icon, label, tool.clone(), tip, 0);
+                    }
+                });
+            }
+        });
+        group(ui, "Text und Objekte", |ui| {
+            self.tool_rb(ui, "text", "Text", Tool::Text, "Text", 2);
+            col(ui, |ui| {
+                if self.small(ui, "bild", "Bild", Opt::default(), "Bild einfügen").clicked() {
+                    self.import_dialog("bild");
+                }
+                if self.small(ui, "pdf_einbetten", "Eingebettetes PDF", Opt::default(), "PDF-Seite einfügen").clicked() {
+                    self.import_dialog("pdf");
+                }
+                if self.small(ui, "xref", "Externe Referenz", Opt::default(), "Anderen Plan als Gruppe einfügen").clicked() {
+                    self.import_dialog("plan");
+                }
+            });
+            col(ui, |ui| {
+                self.tool_rb(ui, "tabelle", "Tabelle", Tool::Table, "Tabelle", 1);
+                self.tool_rb(ui, "notiz", "Notiz", Tool::Note, "Notiz (wird nicht gedruckt)", 1);
+            });
+        });
+        group(ui, "Planelemente", |ui| {
+            self.tool_rb(ui, "legende", "Legende", Tool::Legend, "Legende als Rahmen aufziehen (wird automatisch befüllt)", 2);
+            col(ui, |ui| {
+                if self.small(ui, "legende", "Legende …", Opt::default(), "Legenden-Assistent").clicked() {
+                    self.dlg.legend = true;
+                }
+                if self.small(ui, "laufkarte", "Rahmen für Laufkarten", Opt::default(), "Planrahmen auf Feuerwehr-Laufkarte (DIN 14675) umstellen").clicked() {
+                    let tab = self.tab_mut();
+                    tab.push_undo();
+                    apply_frame_defaults(&mut tab.doc, FrameKind::Laufkarte);
+                    tab.doc.frame = FrameKind::Laufkarte;
+                    tab.fit = true;
+                }
+                if self.small(ui, "rahmen", "Rahmen und Titel …", Opt::default(), "").clicked() {
+                    self.dlg.page = true;
+                }
+            });
         });
     }
 
     fn ribbon_bearbeiten(&mut self, ui: &mut egui::Ui) {
         let has_sel = !self.tab().sel.is_empty();
-        group(ui, "Bearbeiten", |ui| {
-            if ui.add_enabled(has_sel, egui::Button::new("Löschen")).clicked() {
-                self.delete_selection();
-            }
-            if ui.add_enabled(!self.tab().undo.is_empty(), egui::Button::new("Rückgängig")).clicked() {
-                self.tab_mut().undo();
-            }
-            if ui.add_enabled(!self.tab().redo.is_empty(), egui::Button::new("Wiederholen")).clicked() {
-                self.tab_mut().redo();
-            }
-            ui.menu_button("Polygon füllen …", |ui| {
-                for p in presets::PRESETS.iter() {
-                    if ui.button(p.name).clicked() {
-                        self.tool = Tool::FillPolygon(p.key.into());
-                        ui.close();
-                    }
-                }
-            });
-            self.tool_btn(ui, "Plan schneiden", Tool::CutPlan, "Alles außerhalb eines Rechtecks entfernen");
-            self.tool_btn(ui, "Punkt einfügen", Tool::InsertPoint, "Punkt in Linienzug/Wand einfügen");
-            if ui.button("Symbol-Manager …").clicked() {
-                self.dlg.symbol_manager = true;
-            }
-            if ui.button("Suchen / Ersetzen …").clicked() {
-                self.dlg.search = true;
-            }
-        });
         group(ui, "Zwischenablage", |ui| {
-            if ui.add_enabled(!self.clipboard.is_empty(), egui::Button::new("Einfügen")).clicked() {
+            if self.big(ui, "einfuegen", "Einfügen", Opt::enabled(!self.clipboard.is_empty()), "Aus der Zwischenablage einfügen (Strg+V)").clicked() {
                 self.paste(Pos::new(5.0, 5.0));
             }
-            if ui.add_enabled(has_sel, egui::Button::new("Ausschneiden")).clicked() {
-                self.cut();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Kopieren")).clicked() {
-                self.copy();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Duplizieren")).clicked() {
-                self.duplicate();
-            }
+            col(ui, |ui| {
+                if self.small(ui, "ausschneiden", "Ausschneiden", Opt::enabled(has_sel), "").clicked() {
+                    self.cut();
+                }
+                if self.small(ui, "kopieren", "Kopieren", Opt::enabled(has_sel), "").clicked() {
+                    self.copy();
+                }
+                if self.small(ui, "duplizieren", "Duplizieren", Opt::enabled(has_sel), "").clicked() {
+                    self.duplicate();
+                }
+            });
+        });
+        group(ui, "Bearbeiten", |ui| {
+            col(ui, |ui| {
+                if self.small(ui, "rueckgaengig", "Rückgängig", Opt::enabled(!self.tab().undo.is_empty()), "Strg+Z").clicked() {
+                    self.tab_mut().undo();
+                }
+                if self.small(ui, "wiederholen", "Wiederholen", Opt::enabled(!self.tab().redo.is_empty()), "Strg+Y").clicked() {
+                    self.tab_mut().redo();
+                }
+                if self.small(ui, "loeschen", "Löschen", Opt::enabled(has_sel), "Entf").clicked() {
+                    self.delete_selection();
+                }
+            });
+            col(ui, |ui| {
+                let r = self.small(ui, "fuellen", "Polygon füllen …", Opt::menu(), "In umschlossene Fläche klicken");
+                egui::Popup::menu(&r).show(|ui| {
+                    for p in presets::PRESETS.iter() {
+                        if ui.button(p.name).clicked() {
+                            self.tool = Tool::FillPolygon(p.key.into());
+                            ui.close();
+                        }
+                    }
+                });
+                self.tool_rb(ui, "plan_schneiden", "Plan schneiden", Tool::CutPlan, "Alles außerhalb eines Rechtecks entfernen", 1);
+                self.tool_rb(ui, "punkt", "Punkt einfügen", Tool::InsertPoint, "Punkt in Linienzug/Wand einfügen", 1);
+            });
+            col(ui, |ui| {
+                if self.small(ui, "symbolmanager", "Symbol-Manager …", Opt::default(), "").clicked() {
+                    self.dlg.symbol_manager = true;
+                }
+                if self.small(ui, "suchen", "Suchen / Ersetzen …", Opt::default(), "").clicked() {
+                    self.dlg.search = true;
+                }
+            });
         });
         group(ui, "Auswahl", |ui| {
-            if ui.button("Alles").clicked() {
-                self.select_all();
-            }
-            if ui.button("Invertieren").clicked() {
-                self.invert_selection();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Nach Inhalt (gleiche)")).clicked() {
-                self.select_similar();
-            }
+            col(ui, |ui| {
+                if self.small(ui, "alles", "Alles", Opt::default(), "Alles auswählen (Strg+A)").clicked() {
+                    self.select_all();
+                }
+                if self.small(ui, "invertieren", "Invertieren", Opt::default(), "Auswahl umkehren").clicked() {
+                    self.invert_selection();
+                }
+                if self.small(ui, "gleiche", "Nach Inhalt (gleiche)", Opt::enabled(has_sel), "Alle gleichartigen Elemente auswählen").clicked() {
+                    self.select_similar();
+                }
+            });
         });
-        group(ui, "Verändern", |ui| {
-            if ui.add_enabled(has_sel, egui::Button::new("Gruppieren")).clicked() {
-                self.group();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Gruppe aufheben")).clicked() {
-                self.ungroup();
-            }
-            if ui
-                .button("Symbole erkennen")
-                .on_hover_text("Einzelteile importierter Symbole (Hintergrund, Rahmen, Zeichen, Text) zu je einer Gruppe zusammenfassen – in der Auswahl oder, ohne Auswahl, im ganzen Plan")
-                .clicked()
-            {
-                self.symbole_erkennen();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Mehrfachkopie …")).clicked() {
-                self.dlg.multicopy = true;
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Versatz (Offset) …")).on_hover_text("Parallele Kopie im festen Abstand").clicked() {
-                self.dlg.offset = true;
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Drehen -90°")).clicked() {
-                self.transform_sel(|k, c| ops::rotate(k, c, -90.0));
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Drehen +90°")).clicked() {
-                self.transform_sel(|k, c| ops::rotate(k, c, 90.0));
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Spiegeln waagerecht")).clicked() {
-                self.transform_sel(|k, c| ops::mirror(k, c, true));
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Spiegeln senkrecht")).clicked() {
-                self.transform_sel(|k, c| ops::mirror(k, c, false));
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Nach vorne")).clicked() {
-                self.order(true, true);
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("Nach hinten")).clicked() {
-                self.order(false, true);
-            }
-            ui.menu_button("Ausrichten …", |ui| {
-                for (i, n) in ["Links", "Horizontal zentriert", "Rechts", "Oben", "Vertikal zentriert", "Unten"].iter().enumerate() {
-                    if ui.button(*n).clicked() {
-                        self.align(i as u8);
-                        ui.close();
+        group(ui, "Anordnen", |ui| {
+            col(ui, |ui| {
+                if self.small(ui, "gruppieren", "Gruppieren", Opt::enabled(has_sel), "").clicked() {
+                    self.group();
+                }
+                if self.small(ui, "gruppe_aufheben", "Gruppe aufheben", Opt::enabled(has_sel), "").clicked() {
+                    self.ungroup();
+                }
+                if self
+                    .small(ui, "symbole_erkennen", "Symbole erkennen", Opt::default(), "Einzelteile importierter Symbole (Hintergrund, Rahmen, Zeichen, Text) zu je einer Gruppe zusammenfassen – in der Auswahl oder, ohne Auswahl, im ganzen Plan")
+                    .clicked()
+                {
+                    self.symbole_erkennen();
+                }
+            });
+            col(ui, |ui| {
+                if self.small(ui, "mehrfach", "Mehrfachkopie …", Opt::enabled(has_sel), "").clicked() {
+                    self.dlg.multicopy = true;
+                }
+                if self.small(ui, "versatz", "Versatz (Offset) …", Opt::enabled(has_sel), "Parallele Kopie im festen Abstand").clicked() {
+                    self.dlg.offset = true;
+                }
+                let r = self.small(ui, "ausrichten", "Ausrichten …", Opt { menu: true, disabled: !has_sel, ..Opt::default() }, "");
+                egui::Popup::menu(&r).show(|ui| {
+                    for (i, n) in ["Links", "Horizontal zentriert", "Rechts", "Oben", "Vertikal zentriert", "Unten"].iter().enumerate() {
+                        if ui.button(*n).clicked() {
+                            self.align(i as u8);
+                            ui.close();
+                        }
                     }
+                });
+            });
+            col(ui, |ui| {
+                if self.tiny(ui, "drehen_l", "Drehen -90°", Opt::enabled(has_sel), "").clicked() {
+                    self.transform_sel(|k, c| ops::rotate(k, c, -90.0));
+                }
+                if self.tiny(ui, "drehen_r", "Drehen +90°", Opt::enabled(has_sel), "").clicked() {
+                    self.transform_sel(|k, c| ops::rotate(k, c, 90.0));
+                }
+                if self.tiny(ui, "spiegeln_h", "Spiegeln waagerecht", Opt::enabled(has_sel), "").clicked() {
+                    self.transform_sel(|k, c| ops::mirror(k, c, true));
+                }
+            });
+            col(ui, |ui| {
+                if self.tiny(ui, "spiegeln_v", "Spiegeln senkrecht", Opt::enabled(has_sel), "").clicked() {
+                    self.transform_sel(|k, c| ops::mirror(k, c, false));
+                }
+                if self.tiny(ui, "vorne", "Nach vorne", Opt::enabled(has_sel), "").clicked() {
+                    self.order(true, true);
+                }
+                if self.tiny(ui, "hinten", "Nach hinten", Opt::enabled(has_sel), "").clicked() {
+                    self.order(false, true);
                 }
             });
         });
         group(ui, "Wand", |ui| {
-            self.tool_btn(ui, "Segment ausschneiden", Tool::SegmentCut, "Wandsegment entfernen (z. B. für Durchgänge)");
-            self.tool_btn(ui, "Schnittpunkt einfügen", Tool::InsertPoint, "Zusätzlichen Eckpunkt einfügen");
-            self.tool_btn(ui, "Ecke abrunden", Tool::Fillet, "Ecke mit Radius abrunden");
-            ui.label("Radius");
-            ui.add(egui::DragValue::new(&mut self.settings.fillet_mm).range(0.5..=100.0).suffix(" mm"));
+            col(ui, |ui| {
+                self.tool_rb(ui, "segment", "Segment ausschneiden", Tool::SegmentCut, "Wandsegment entfernen (z. B. für Durchgänge)", 1);
+                self.tool_rb(ui, "punkt", "Schnittpunkt einfügen", Tool::InsertPoint, "Zusätzlichen Eckpunkt einfügen", 1);
+                row(ui, |ui| {
+                    self.tool_rb(ui, "ecke", "Ecke abrunden", Tool::Fillet, "Ecke mit Radius abrunden", 1);
+                    ui.add(egui::DragValue::new(&mut self.settings.fillet_mm).range(0.5..=100.0).suffix(" mm")).on_hover_text("Radius");
+                });
+            });
         });
         group(ui, "Messen", |ui| {
-            self.tool_btn(ui, "Kurve Feuerwehrzufahrt", Tool::FireCurve, "Kurve nach DIN 14090 (Außenradius ≥ 10,5 m)");
-            self.tool_btn(ui, "Distanz [m]", Tool::MeasureM, "Strecke im Planmaßstab");
-            self.tool_btn(ui, "Distanz [mm]", Tool::MeasureMm, "Strecke auf dem Blatt");
-            self.tool_btn(ui, "Winkel", Tool::MeasureAngle, "Winkel messen");
+            col(ui, |ui| {
+                self.tool_rb(ui, "distanz", "Distanz [m]", Tool::MeasureM, "Strecke im Planmaßstab", 1);
+                self.tool_rb(ui, "distanz", "Distanz [mm]", Tool::MeasureMm, "Strecke auf dem Blatt", 1);
+                self.tool_rb(ui, "winkel", "Winkel", Tool::MeasureAngle, "Winkel messen", 1);
+            });
+            self.tool_rb(ui, "kurve", "Kurve Feuerwehrzufahrt", Tool::FireCurve, "Kurve nach DIN 14090 (Außenradius ≥ 10,5 m)", 2);
         });
     }
 
     fn ribbon_ansicht(&mut self, ui: &mut egui::Ui) {
         group(ui, "Zoom", |ui| {
-            if ui.button("Hereinzoomen").clicked() {
-                self.tab_mut().zoom *= 1.25;
-            }
-            if ui.button("Herauszoomen").clicked() {
-                self.tab_mut().zoom /= 1.25;
-            }
-            if ui.button("Automatisch anpassen").clicked() {
+            if self.big(ui, "zoom_fit", "Automatisch anpassen", Opt::default(), "Ganzen Plan zeigen").clicked() {
                 self.tab_mut().fit = true;
             }
-            self.tool_btn(ui, "In Bereich zoomen", Tool::ZoomBox, "Rechteck aufziehen");
-            if ui.add_enabled(!self.tab().sel.is_empty(), egui::Button::new("Auf Auswahl")).clicked() {
-                let b = self.tab().sel_bounds().expand(10.0);
-                self.zoom_to(b);
-            }
-        });
-        group(ui, "Willkommensdialog", |ui| {
-            if ui.button("Anzeigen").clicked() {
-                self.dlg.welcome = true;
-            }
+            col(ui, |ui| {
+                if self.small(ui, "zoom_in", "Hereinzoomen", Opt::default(), "").clicked() {
+                    self.tab_mut().zoom *= 1.25;
+                }
+                if self.small(ui, "zoom_out", "Herauszoomen", Opt::default(), "").clicked() {
+                    self.tab_mut().zoom /= 1.25;
+                }
+            });
+            col(ui, |ui| {
+                self.tool_rb(ui, "zoom_bereich", "In Bereich zoomen", Tool::ZoomBox, "Rechteck aufziehen", 1);
+                if self.small(ui, "zoom_auswahl", "Auf Auswahl", Opt::enabled(!self.tab().sel.is_empty()), "").clicked() {
+                    let b = self.tab().sel_bounds().expand(10.0);
+                    self.zoom_to(b);
+                }
+            });
         });
         group(ui, "Raster und Fang", |ui| {
-            ui.checkbox(&mut self.settings.grid_show, "Gitternetz");
-            ui.checkbox(&mut self.settings.grid_snap, "Am Raster fangen");
-            ui.checkbox(&mut self.settings.point_snap, "Punktfang");
-            ui.add(egui::DragValue::new(&mut self.settings.grid_mm).range(0.5..=100.0).speed(0.5).suffix(" mm"));
+            let mut s = std::mem::take(&mut self.settings);
+            col(ui, |ui| {
+                self.toggle(ui, "gitter", "Gitternetz", &mut s.grid_show, "Gitternetz anzeigen");
+                self.toggle(ui, "fang", "Am Raster fangen", &mut s.grid_snap, "");
+                self.toggle(ui, "punktfang", "Punktfang", &mut s.point_snap, "An End- und Eckpunkten fangen");
+            });
+            col(ui, |ui| {
+                row(ui, |ui| {
+                    ui.label("Raster");
+                    ui.add(egui::DragValue::new(&mut s.grid_mm).range(0.5..=100.0).speed(0.5).suffix(" mm"));
+                });
+            });
+            self.settings = s;
         });
         group(ui, "Hilfen", |ui| {
-            ui.checkbox(&mut self.settings.rulers, "Lineal");
-            ui.checkbox(&mut self.settings.guides, "Hilfslinien");
-            self.tool_btn(ui, "Hilfslinie setzen", Tool::Guide, "Klick: waagerecht, Umschalt+Klick: senkrecht");
-            if ui.button("Hilfslinien löschen").clicked() {
-                let tab = self.tab_mut();
-                tab.push_undo();
-                tab.doc.guides.clear();
-            }
+            let mut s = std::mem::take(&mut self.settings);
+            col(ui, |ui| {
+                self.toggle(ui, "lineal", "Lineal", &mut s.rulers, "");
+                self.toggle(ui, "hilfslinie", "Hilfslinien", &mut s.guides, "Hilfslinien anzeigen");
+            });
+            self.settings = s;
+            col(ui, |ui| {
+                self.tool_rb(ui, "hilfslinie", "Hilfslinie setzen", Tool::Guide, "Klick: waagerecht, Umschalt+Klick: senkrecht", 1);
+                if self.small(ui, "hilfslinie_loeschen", "Hilfslinien löschen", Opt::default(), "").clicked() {
+                    let tab = self.tab_mut();
+                    tab.push_undo();
+                    tab.doc.guides.clear();
+                }
+            });
         });
-        group(ui, "Hintergrund und Qualität", |ui| {
-            let mut c = Color32::from_rgb(self.settings.bg[0], self.settings.bg[1], self.settings.bg[2]);
-            if ui.color_edit_button_srgba(&mut c).changed() {
-                self.settings.bg = [c.r(), c.g(), c.b()];
-            }
-            let before = self.settings.quality_high;
-            ui.selectable_value(&mut self.settings.quality_high, true, "Hoch");
-            ui.selectable_value(&mut self.settings.quality_high, false, "Gering");
-            if before != self.settings.quality_high {
-                self.textures.quality_high = self.settings.quality_high;
-                self.textures.clear_symbols();
+        group(ui, "Darstellung", |ui| {
+            col(ui, |ui| {
+                row(ui, |ui| {
+                    let mut c = Color32::from_rgb(self.settings.bg[0], self.settings.bg[1], self.settings.bg[2]);
+                    if ui.color_edit_button_srgba(&mut c).on_hover_text("Hintergrundfarbe der Arbeitsfläche").changed() {
+                        self.settings.bg = [c.r(), c.g(), c.b()];
+                    }
+                    ui.label("Hintergrund");
+                });
+                let before = self.settings.quality_high;
+                row(ui, |ui| {
+                    if self.small(ui, "qualitaet", "Hoch", Opt::sel(self.settings.quality_high), "Symbole in hoher Qualität darstellen").clicked() {
+                        self.settings.quality_high = true;
+                    }
+                    if self.small(ui, "qualitaet", "Gering", Opt::sel(!self.settings.quality_high), "Schnellere Darstellung bei großen Plänen").clicked() {
+                        self.settings.quality_high = false;
+                    }
+                });
+                if before != self.settings.quality_high {
+                    self.textures.quality_high = self.settings.quality_high;
+                    self.textures.clear_symbols();
+                }
+            });
+            if self.big(ui, "willkommen", "Willkommen", Opt::default(), "Willkommensdialog anzeigen").clicked() {
+                self.dlg.welcome = true;
             }
         });
     }
 
     fn ribbon_extras(&mut self, ui: &mut egui::Ui) {
-        group(ui, "Optionen", |ui| {
-            if ui.button("OSM-Karte …").on_hover_text("Kartenausschnitt aus OpenStreetMap einfügen").clicked() {
+        group(ui, "Karten", |ui| {
+            if self.big(ui, "osm", "OSM-Karte …", Opt::default(), "Kartenausschnitt aus OpenStreetMap einfügen").clicked() {
                 self.dlg.osm = true;
             }
-            if ui.button("Flurkarte (WMS) …").on_hover_text("Maßstäbliche Flurkarte (ALKIS) oder amtliche Karte über WMS einfügen").clicked() {
+            if self.big(ui, "wms", "Flurkarte (WMS) …", Opt::default(), "Maßstäbliche Flurkarte (ALKIS) oder amtliche Karte über WMS einfügen").clicked() {
                 self.dlg.wms = true;
-            }
-            if ui.button("Optionen …").clicked() {
-                self.dlg.options = true;
-            }
-            if ui.button("Archivieren …").on_hover_text("Plan inkl. PDF als ZIP sichern").clicked() {
-                self.archive();
-            }
-            if ui.button("Dearchivieren …").clicked() {
-                self.unarchive();
             }
         });
         group(ui, "Vorlagen", |ui| {
-            if ui.button("Brandschutzordnung (Teil A) …").clicked() {
+            if self.big(ui, "bso", "Brandschutzordnung (Teil A) …", Opt::default(), "Brandschutzordnung nach DIN 14096 erstellen").clicked() {
                 self.dlg.bso = true;
             }
-            if ui.button("Musterpläne …").clicked() {
-                self.dlg.samples = true;
-            }
-            if ui.button("Eigenes Symbol (SVG) …").clicked() {
-                self.import_dialog("svg");
-            }
-            if ui.button("Logo für Planrahmen …").clicked() {
-                self.import_dialog("logo");
+            col(ui, |ui| {
+                if self.small(ui, "muster", "Musterpläne …", Opt::default(), "").clicked() {
+                    self.dlg.samples = true;
+                }
+                if self.small(ui, "svg_symbol", "Eigenes Symbol (SVG) …", Opt::default(), "").clicked() {
+                    self.import_dialog("svg");
+                }
+                if self.small(ui, "logo", "Logo für Planrahmen …", Opt::default(), "").clicked() {
+                    self.import_dialog("logo");
+                }
+            });
+        });
+        group(ui, "Daten", |ui| {
+            col(ui, |ui| {
+                if self.small(ui, "archiv", "Archivieren …", Opt::default(), "Plan inkl. PDF als ZIP sichern").clicked() {
+                    self.archive();
+                }
+                if self.small(ui, "dearchiv", "Dearchivieren …", Opt::default(), "").clicked() {
+                    self.unarchive();
+                }
+            });
+            if self.big(ui, "optionen", "Optionen …", Opt::default(), "Einstellungen").clicked() {
+                self.dlg.options = true;
             }
         });
         group(ui, "Hilfe", |ui| {
-            if ui.button("Benutzerhilfe").clicked() {
+            if self.big(ui, "hilfe", "Benutzerhilfe", Opt::default(), "").clicked() {
                 self.dlg.help = true;
             }
-            if ui.button("Über").clicked() {
+            if self.big(ui, "info", "Über", Opt::default(), "").clicked() {
                 self.dlg.about = true;
             }
         });

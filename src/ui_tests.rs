@@ -379,7 +379,7 @@ fn dialoge_als_bild() {
     // Wie im Programm nur DirectX 12 (andere Backends stürzen unter RDP ab)
     let mut setup = egui_kittest::wgpu::default_wgpu_setup();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(s) = &mut setup {
-        s.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+        s.instance_descriptor.backends = if cfg!(windows) { eframe::wgpu::Backends::DX12 } else { eframe::wgpu::Backends::PRIMARY };
     }
     let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_max_steps(20).with_accessibility_check(false).wgpu_setup(setup).build_eframe(|cc| {
         let mut app = App::new(cc);
@@ -419,7 +419,7 @@ fn pdf_import_im_programm() {
     let Some(f) = crate::tests::test_pdfs().into_iter().next() else { return };
     let mut setup = egui_kittest::wgpu::default_wgpu_setup();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(s) = &mut setup {
-        s.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+        s.instance_descriptor.backends = if cfg!(windows) { eframe::wgpu::Backends::DX12 } else { eframe::wgpu::Backends::PRIMARY };
     }
     let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_max_steps(20).with_accessibility_check(false).wgpu_setup(setup).build_eframe(|cc| {
         let mut app = App::new(cc);
@@ -458,9 +458,9 @@ fn menueband_als_bild() {
     for w in [1600.0, 1100.0] {
         let mut setup = egui_kittest::wgpu::default_wgpu_setup();
         if let eframe::egui_wgpu::WgpuSetup::CreateNew(s) = &mut setup {
-            s.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+            s.instance_descriptor.backends = if cfg!(windows) { eframe::wgpu::Backends::DX12 } else { eframe::wgpu::Backends::PRIMARY };
         }
-        let mut h = Harness::builder().with_size(egui::vec2(w, 700.0)).with_max_steps(20).with_accessibility_check(false).wgpu_setup(setup).build_eframe(|cc| {
+        let mut h = Harness::builder().with_theme(egui::Theme::Light).with_size(egui::vec2(w, 700.0)).with_max_steps(20).with_accessibility_check(false).wgpu_setup(setup).build_eframe(|cc| {
             let mut app = App::new(cc);
             app.dlg.welcome = false;
             app.settings.ui_scale = 1.0;
@@ -471,7 +471,7 @@ fn menueband_als_bild() {
             click_label(&mut h, tab);
             h.run_steps(3);
             let img = h.render().unwrap();
-            let top = image::imageops::crop_imm(&img, 0, 0, img.width(), 260.min(img.height())).to_image();
+            let top = image::imageops::crop_imm(&img, 0, 0, img.width(), 135.min(img.height())).to_image();
             top.save(std::path::Path::new(&dir).join(format!("ribbon_{}_{i}.png", w as u32))).unwrap();
         }
     }

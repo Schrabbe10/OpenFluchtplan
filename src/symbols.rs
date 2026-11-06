@@ -127,20 +127,34 @@ fn mirror(inner: &str) -> String {
 
 // ---------- Piktogramme (füllen das Feld 0..100) ----------
 
+/// Laufende Person (nach rechts), kräftige Vollfigur wie bei den Rettungszeichen
 fn man(c: &str) -> String {
     format!(
-        "<g fill='none' stroke='{c}' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'>\
-         <path d='M54 33 L44 58'/><path d='M53 35 L66 45 L78 41'/><path d='M52 35 L40 41 L31 51'/>\
-         <path d='M44 58 L58 68 L56 87'/><path d='M44 58 L34 72 L18 74'/></g>\
-         <circle cx='59' cy='19' r='8.5' fill='{c}'/>"
+        "<g fill='none' stroke='{c}' stroke-linecap='round' stroke-linejoin='round'>\
+         <path d='M57 35 L47 59' stroke-width='15'/>\
+         <path d='M59 37 L70 49 L83 45' stroke-width='10.5'/><path d='M54 37 L41 43 L31 55' stroke-width='10.5'/>\
+         <path d='M49 60 L65 68 L63 87 L70 88' stroke-width='11.5'/><path d='M46 61 L36 77 L19 79' stroke-width='11.5'/></g>\
+         <circle cx='65' cy='16' r='9' fill='{c}'/>"
     )
 }
+/// Stehende Person (Vorderansicht), Vollfigur
 fn standing_man(c: &str) -> String {
+    format!("<g transform='translate(50,50)'>{}</g>", person(c))
+}
+/// Person mit Mittelpunkt (0,0), Höhe von −46 bis +40
+fn person(c: &str) -> String {
     format!(
-        "<circle cx='50' cy='16' r='9' fill='{c}'/>\
-         <g fill='none' stroke='{c}' stroke-width='10' stroke-linecap='round'>\
-         <path d='M50 32 L50 62'/><path d='M50 34 L34 52'/><path d='M50 34 L66 52'/>\
-         <path d='M50 62 L40 88'/><path d='M50 62 L60 88'/></g>"
+        "<circle cx='0' cy='-37' r='9' fill='{c}'/>\
+         <path d='M-11 -25 H11 L9 6 H-9 Z' fill='{c}' stroke='{c}' stroke-width='5' stroke-linejoin='round'/>\
+         <g fill='none' stroke='{c}' stroke-linecap='round'><path d='M-13.5 -22 L-16 4 M13.5 -22 L16 4' stroke-width='7'/>\
+         <path d='M-5.5 6 L-5.5 39 M5.5 6 L5.5 39' stroke-width='8.5'/></g>"
+    )
+}
+/// Kopf und Schultern (Vorderansicht) für Gebotszeichen; `bg` trennt Ausrüstung und Kopf
+fn bust(c: &str) -> String {
+    format!(
+        "<ellipse cx='50' cy='48' rx='17' ry='21' fill='{c}'/>\
+         <path d='M18 94 C18 78 30 70 42 69 L50 76 L58 69 C70 70 82 78 82 94 Z' fill='{c}'/><rect x='44' y='62' width='12' height='10' fill='{c}'/>"
     )
 }
 fn door(c: &str) -> String {
@@ -192,9 +206,14 @@ fn bolt(c: &str) -> String {
 fn exclam(c: &str) -> String {
     format!("<rect x='42' y='8' width='16' height='58' rx='6' fill='{c}'/><circle cx='50' cy='82' r='9' fill='{c}'/>")
 }
+/// Explodierender Körper: Kugel mit wegfliegenden Splittern
 fn burst(c: &str) -> String {
     format!(
-        "<polygon points='50,4 58,32 86,18 70,44 96,52 68,60 82,88 56,70 50,96 42,70 16,86 30,60 4,52 30,44 14,18 42,32' fill='{c}'/>"
+        "<circle cx='50' cy='54' r='17' fill='{c}'/>\
+         <g fill='{c}'><polygon points='50,4 56,28 44,28'/><polygon points='50,96 44,80 56,80'/><polygon points='4,54 26,48 26,60'/><polygon points='96,54 74,60 74,48'/>\
+         <polygon points='16,18 34,32 28,38'/><polygon points='84,18 72,38 66,32'/><polygon points='16,90 28,70 34,76'/><polygon points='84,90 66,76 72,70'/>\
+         <rect x='26' y='8' width='7' height='7' transform='rotate(20 29 11)'/><rect x='68' y='6' width='6' height='6' transform='rotate(35 71 9)'/>\
+         <rect x='6' y='30' width='6' height='6'/><rect x='88' y='74' width='6' height='6' transform='rotate(15 91 77)'/></g>"
     )
 }
 fn skull(c: &str) -> String {
@@ -204,11 +223,14 @@ fn skull(c: &str) -> String {
          <g stroke='{c}' stroke-width='8' stroke-linecap='round'><path d='M14 78 L86 94 M14 94 L86 78'/></g>"
     )
 }
+/// Ätzende Stoffe: zwei Reagenzgläser tropfen auf eine Hand und eine Oberfläche
 fn drops_hand(c: &str) -> String {
     format!(
-        "<path d='M20 12 L40 12 L40 30 L20 30 Z M60 12 L80 12 L80 30 L60 30 Z' fill='{c}'/>\
-         <path d='M30 34 C26 42 26 46 30 48 C34 46 34 42 30 34 Z M70 34 C66 42 66 46 70 48 C74 46 74 42 70 34 Z' fill='{c}'/>\
-         <rect x='8' y='70' width='38' height='10' fill='{c}'/><path d='M54 66 L92 66 L92 86 L60 86 Z' fill='{c}'/>"
+        "<g stroke='{c}' stroke-width='11' stroke-linecap='round'><path d='M40 4 L26 28'/><path d='M60 4 L74 28'/></g>\
+         <path d='M22 38 C18 45 18 49 22 51 C26 49 26 45 22 38 Z M78 38 C74 45 74 49 78 51 C82 49 82 45 78 38 Z' fill='{c}'/>\
+         <path d='M2 68 L34 68 C40 68 44 71 44 75 C44 79 40 82 34 82 L2 82 Z' fill='{c}'/><path d='M8 68 C8 58 16 56 22 60 L18 68 Z' fill='{c}'/>\
+         <polygon points='16,68 28,68 22,76' fill='{Y}'/>\
+         <rect x='56' y='66' width='42' height='18' fill='{c}'/><polygon points='71,66 85,66 78,77' fill='{Y}'/>"
     )
 }
 fn gas_bottle(c: &str) -> String {
@@ -269,11 +291,28 @@ fn trefoil(c: &str) -> String {
          <path d='M40 58 L26 84 A36 36 0 0 1 12 58 Z' fill='{c}'/>"
     )
 }
+/// Zeichen für Biogefährdung (drei offene Ringe um einen Mittelring)
 fn biohazard(c: &str) -> String {
-    format!(
-        "<g fill='none' stroke='{c}' stroke-width='7'><circle cx='50' cy='34' r='18'/><circle cx='34' cy='62' r='18'/><circle cx='66' cy='62' r='18'/></g>\
-         <circle cx='50' cy='52' r='8' fill='{c}'/>"
-    )
+    let (cx, cy) = (50.0_f32, 56.0_f32);
+    let mut out = String::new();
+    let dirs: Vec<(f32, f32)> = [-90.0_f32, 30.0, 150.0].iter().map(|a| (a.to_radians().cos(), a.to_radians().sin())).collect();
+    for (dx, dy) in &dirs {
+        out += &format!("<circle cx='{:.2}' cy='{:.2}' r='22' fill='{c}'/>", cx + dx * 22.0, cy + dy * 22.0);
+    }
+    for (dx, dy) in &dirs {
+        out += &format!("<circle cx='{:.2}' cy='{:.2}' r='15.5' fill='{Y}'/>", cx + dx * 27.0, cy + dy * 27.0);
+    }
+    out += &format!("<circle cx='{cx}' cy='{cy}' r='14' fill='none' stroke='{c}' stroke-width='4.5'/><circle cx='{cx}' cy='{cy}' r='6' fill='{Y}'/>");
+    for (dx, dy) in &dirs {
+        out += &format!(
+            "<line x1='{:.2}' y1='{:.2}' x2='{:.2}' y2='{:.2}' stroke='{Y}' stroke-width='2.6'/>",
+            cx + dx * 4.0,
+            cy + dy * 4.0,
+            cx + dx * 16.0,
+            cy + dy * 16.0
+        );
+    }
+    out
 }
 fn slip(c: &str) -> String {
     format!(
@@ -293,21 +332,6 @@ fn laser(c: &str) -> String {
          <path d='M8 52 L36 52' stroke='{c}' stroke-width='6'/><path d='M60 52 L94 52 M58 40 L84 22 M58 64 L84 82 M50 30 L50 8 M50 72 L50 94' stroke='{c}' stroke-width='4'/>"
     )
 }
-fn goggles(c: &str) -> String {
-    format!(
-        "<rect x='12' y='38' width='76' height='28' rx='12' fill='{c}'/>\
-         <circle cx='34' cy='52' r='9' fill='{B}'/><circle cx='66' cy='52' r='9' fill='{B}'/>"
-    )
-}
-fn earmuffs(c: &str) -> String {
-    format!(
-        "<path d='M22 56 C22 24 78 24 78 56' fill='none' stroke='{c}' stroke-width='8'/>\
-         <rect x='12' y='50' width='20' height='32' rx='8' fill='{c}'/><rect x='68' y='50' width='20' height='32' rx='8' fill='{c}'/>"
-    )
-}
-fn helmet(c: &str) -> String {
-    format!("<path d='M16 66 C16 34 32 22 50 22 C68 22 84 34 84 66 Z' fill='{c}'/><rect x='8' y='66' width='84' height='10' rx='4' fill='{c}'/>")
-}
 fn boot(c: &str) -> String {
     format!("<path d='M30 14 L56 14 L56 56 C70 58 86 62 86 74 L86 84 L24 84 L24 60 Z' fill='{c}'/>")
 }
@@ -320,17 +344,6 @@ fn glove(c: &str) -> String {
 fn book(c: &str) -> String {
     format!(
         "<path d='M14 24 C30 18 42 20 48 28 L48 84 C42 76 30 74 14 80 Z M86 24 C70 18 58 20 52 28 L52 84 C58 76 70 74 86 80 Z' fill='{c}'/>"
-    )
-}
-fn coat(c: &str) -> String {
-    format!(
-        "<path d='M36 10 L50 20 L64 10 L86 22 L80 48 L70 44 L70 92 L30 92 L30 44 L20 48 L14 22 Z' fill='{c}'/>"
-    )
-}
-fn mask(c: &str) -> String {
-    format!(
-        "<path d='M26 30 C26 18 74 18 74 30 L74 60 C74 78 62 88 50 88 C38 88 26 78 26 60 Z' fill='{c}'/>\
-         <circle cx='40' cy='42' r='7' fill='{B}'/><circle cx='60' cy='42' r='7' fill='{B}'/><circle cx='50' cy='70' r='10' fill='{B}'/>"
     )
 }
 fn elevator(c: &str) -> String {
@@ -458,10 +471,13 @@ fn build() -> Vec<SymbolDef> {
         Rettung,
         "Sammelstelle",
         rescue(&format!(
-            "<polygon points='8,8 30,14 14,30' fill='{W}'/><polygon points='92,8 70,14 86,30' fill='{W}'/>\
-             <polygon points='8,92 30,86 14,70' fill='{W}'/><polygon points='92,92 70,86 86,70' fill='{W}'/>\
-             <g transform='translate(20,22) scale(0.6)'>{}</g>",
-            standing_man(W)
+            "{arrows}<g transform='translate(35,61) scale(0.5)'>{p}</g><g transform='translate(65,61) scale(0.5)'>{p}</g>\
+             <g transform='translate(50,68) scale(0.36)'>{p}</g>",
+            arrows = [0, 90, 180, 270]
+                .iter()
+                .map(|a| format!("<g transform='rotate({a} 50 50)'><polygon points='0,-3.5 10,-3.5 10,-9 21,0 10,9 10,3.5 0,3.5' transform='translate(7,7) rotate(45)' fill='{W}'/></g>"))
+                .collect::<String>(),
+            p = person(W)
         )),
     );
     add("E009", Rettung, "Arzt", rescue(&format!("<g transform='translate(8,8) scale(0.5)'>{}</g><g transform='translate(42,20) scale(0.62)'>{}</g>", cross(W), standing_man(W))));
@@ -510,7 +526,7 @@ fn build() -> Vec<SymbolDef> {
         "E017",
         Rettung,
         "Rettungsausstieg",
-        rescue(&format!("<rect x='54' y='10' width='38' height='46' fill='none' stroke='{W}' stroke-width='5'/><g transform='translate(0,14) scale(0.8)'>{}</g>", man(W))),
+        rescue(&format!("<rect x='54' y='10' width='38' height='46' fill='none' stroke='{W}' stroke-width='5'/><g transform='translate(-8,18) scale(0.78)'>{}</g>", man(W))),
     );
     add(
         "E008",
@@ -645,24 +661,24 @@ fn build() -> Vec<SymbolDef> {
 
     // --- Gebotszeichen ---
     add("M001", Gebot, "Allgemeines Gebotszeichen", mandatory(&exclam(W)));
-    add("M004", Gebot, "Augenschutz benutzen", mandatory(&format!("<g transform='translate(10,10) scale(0.8)'>{}</g>", goggles(W))));
-    add("M003", Gebot, "Gehörschutz benutzen", mandatory(&format!("<g transform='translate(10,10) scale(0.8)'>{}</g>", earmuffs(W))));
-    add("M014", Gebot, "Kopfschutz benutzen", mandatory(&format!("<g transform='translate(10,12) scale(0.8)'>{}</g>", helmet(W))));
+    add("M004", Gebot, "Augenschutz benutzen", mandatory(&format!("{}<path d='M29 40 C29 37 31 36 34 36 L66 36 C69 36 71 37 71 40 L71 50 C71 53 69 55 66 55 L56 55 C53 55 52 50 50 50 C48 50 47 55 44 55 L34 55 C31 55 29 53 29 50 Z' fill='{W}' stroke='{B}' stroke-width='3.5'/><path d='M29 44 L22 46 M71 44 L78 46' stroke='{B}' stroke-width='3.5'/>", bust(W))));
+    add("M003", Gebot, "Gehörschutz benutzen", mandatory(&format!("{}<path d='M25 50 C25 16 75 16 75 50' fill='none' stroke='{B}' stroke-width='12'/><path d='M25 50 C25 16 75 16 75 50' fill='none' stroke='{W}' stroke-width='5'/><rect x='17' y='38' width='15' height='24' rx='6' fill='{W}' stroke='{B}' stroke-width='3'/><rect x='68' y='38' width='15' height='24' rx='6' fill='{W}' stroke='{B}' stroke-width='3'/>", bust(W))));
+    add("M014", Gebot, "Kopfschutz benutzen", mandatory(&format!("{}<path d='M28 38 C28 18 38 10 50 10 C62 10 72 18 72 38 Z' fill='{W}' stroke='{B}' stroke-width='3'/><rect x='20' y='35' width='60' height='7' rx='3' fill='{W}' stroke='{B}' stroke-width='3'/><path d='M50 11 L50 36' stroke='{B}' stroke-width='3'/>", bust(W))));
     add("M008", Gebot, "Fußschutz benutzen", mandatory(&format!("<g transform='translate(12,10) scale(0.78)'>{}</g>", boot(W))));
     add("M009", Gebot, "Handschutz benutzen", mandatory(&format!("<g transform='translate(12,10) scale(0.78)'>{}</g>", glove(W))));
     add("M002", Gebot, "Gebrauchsanweisung beachten", mandatory(&format!("<g transform='translate(10,10) scale(0.8)'>{}</g>", book(W))));
-    add("M010", Gebot, "Schutzkleidung benutzen", mandatory(&format!("<g transform='translate(12,10) scale(0.78)'>{}</g>", coat(W))));
-    add("M017", Gebot, "Atemschutz benutzen", mandatory(&format!("<g transform='translate(12,10) scale(0.78)'>{}</g>", mask(W))));
-    add("M015", Gebot, "Warnweste benutzen", mandatory(&format!("<g transform='translate(12,10) scale(0.78)'>{}<path d='M40 30 L40 90 M60 30 L60 90' stroke='{B}' stroke-width='6'/></g>", coat(W))));
+    add("M010", Gebot, "Schutzkleidung benutzen", mandatory(&format!("<g transform='translate(50,52) scale(0.92)'><circle cx='0' cy='-37' r='9' fill='{W}'/><path d='M-14 -26 H14 L18 22 H-18 Z' fill='{W}' stroke='{W}' stroke-width='4' stroke-linejoin='round'/><path d='M-16 -22 L-22 8 M16 -22 L22 8' stroke='{W}' stroke-width='8' stroke-linecap='round'/><path d='M-6 22 L-6 40 M6 22 L6 40' stroke='{W}' stroke-width='9' stroke-linecap='round'/><path d='M0 -24 L0 20' stroke='{B}' stroke-width='2.5'/></g>")));
+    add("M017", Gebot, "Atemschutz benutzen", mandatory(&format!("{}<path d='M36 50 L64 50 L62 64 C58 71 42 71 38 64 Z' fill='{W}' stroke='{B}' stroke-width='3.5' stroke-linejoin='round'/><path d='M44 60 L56 60' stroke='{B}' stroke-width='2.5'/><circle cx='31' cy='62' r='7' fill='{W}' stroke='{B}' stroke-width='3'/><circle cx='69' cy='62' r='7' fill='{W}' stroke='{B}' stroke-width='3'/><path d='M33 45 L24 40 M67 45 L76 40' stroke='{B}' stroke-width='3'/>", bust(W))));
+    add("M015", Gebot, "Warnweste benutzen", mandatory(&format!("<path d='M34 14 L44 14 L50 34 L56 14 L66 14 L78 26 L74 86 L26 86 L22 26 Z' fill='{W}'/><path d='M24 52 L76 52 M25 66 L75 66' stroke='{B}' stroke-width='5'/><path d='M50 34 L50 86' stroke='{B}' stroke-width='2.5'/>")));
 
     // --- Verbotszeichen ---
     add("P001", Verbot, "Allgemeines Verbotszeichen", prohibition(""));
     add("P002", Verbot, "Rauchen verboten", prohibition(&cigarette(K)));
-    add("P003", Verbot, "Keine offene Flamme", prohibition(&format!("<g transform='translate(20,14) scale(0.6)'>{}</g>", flame(K))));
+    add("P003", Verbot, "Keine offene Flamme", prohibition(&format!("<path d='M34 82 L58 46' stroke='{K}' stroke-width='7' stroke-linecap='round'/><ellipse cx='60' cy='43' rx='6' ry='8' transform='rotate(34 60 43)' fill='{K}'/><g transform='translate(48,10) scale(0.32)'>{}</g>", flame(K))));
     add("P004", Verbot, "Für Fußgänger verboten", prohibition(&format!("<g transform='translate(20,14) scale(0.6)'>{}</g>", standing_man(K))));
     add("P020", Verbot, "Aufzug im Brandfall nicht benutzen", prohibition(&format!("<g transform='translate(20,14) scale(0.6)'>{}</g>", elevator(K))));
     add("P006", Verbot, "Für Flurförderzeuge verboten", prohibition(&format!("<g transform='translate(18,18) scale(0.62)'>{}</g>", forklift(K))));
-    add("P011", Verbot, "Mit Wasser löschen verboten", prohibition(&format!("<g transform='translate(24,16) scale(0.52)'>{}</g>", drop(K))));
+    add("P011", Verbot, "Mit Wasser löschen verboten", prohibition(&format!("<g transform='rotate(35 63 34)'><path d='M53 26 L73 26 L70 44 L56 44 Z' fill='{K}'/><path d='M53 26 C53 19 73 19 73 26' fill='none' stroke='{K}' stroke-width='2.5'/></g><path d='M50 42 C47.5 47 47.5 49 50 50.5 C52.5 49 52.5 47 50 42 Z M43 50 C40.5 55 40.5 57 43 58.5 C45.5 57 45.5 55 43 50 Z' fill='{K}'/><g transform='translate(23,52) scale(0.3)'>{}</g>", flame(K))));
     add("P013", Verbot, "Mobiltelefone verboten", prohibition(&format!("<rect x='38' y='22' width='24' height='54' rx='4' fill='{K}'/><rect x='42' y='28' width='16' height='30' fill='{W}'/>")));
     add("P010", Verbot, "Berühren verboten", prohibition(&format!("<g transform='translate(18,16) scale(0.64)'>{}</g>", hand(K))));
     add("P023", Verbot, "Abstellen oder Lagern verboten", prohibition(&format!("<rect x='30' y='44' width='40' height='30' fill='{K}'/><rect x='38' y='26' width='26' height='18' fill='{K}'/>")));
@@ -800,5 +816,43 @@ mod tests {
             resvg::usvg::Tree::from_str(&svg, &opt).unwrap_or_else(|e| panic!("{}: {e}", s.id));
         }
         assert!(library().len() > 120);
+    }
+}
+
+#[cfg(test)]
+mod sichtpruefung {
+    /// Alle Symbole als Übersichtsblatt (FLUCHTPLAN_TESTBILD=Ordner cargo test symbole_als_bild -- --ignored)
+    #[test]
+    #[ignore = "Sichtprüfung"]
+    fn symbole_als_bild() {
+        let Ok(dir) = std::env::var("FLUCHTPLAN_TESTBILD") else { return };
+        let lib: Vec<_> = super::library().iter().filter(|s| s.id.len() == 4 && s.id[1..].chars().all(|c| c.is_ascii_digit())).collect();
+        let mut cells = String::new();
+        for (k, s) in lib.iter().enumerate() {
+            let (x, y) = ((k % 10) as f32 * 120.0 + 10.0, (k / 10) as f32 * 135.0 + 10.0);
+            cells += &format!("<g transform='translate({x},{y})'>{}<text x='50' y='118' font-size='12' font-family='Arial' text-anchor='middle'>{}</text></g>", s.svg, s.id);
+        }
+        let h = (lib.len() as f32 / 10.0).ceil() * 135.0 + 20.0;
+        let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='1210' height='{h}'><rect width='100%' height='100%' fill='#ddd'/>{cells}</svg>");
+        let tree = resvg::usvg::Tree::from_str(&svg, crate::export::usvg_options()).unwrap();
+        let mut pm = resvg::tiny_skia::Pixmap::new(1210, h as u32).unwrap();
+        resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pm.as_mut());
+        pm.save_png(std::path::Path::new(&dir).join("symbole.png")).unwrap();
+        // ausgewählte Zeichen groß
+        let ids = std::env::var("FLUCHTPLAN_IDS").unwrap_or_default();
+        let ids: Vec<&str> = ids.split(',').filter(|s| !s.is_empty()).collect();
+        if !ids.is_empty() {
+            let mut cells = String::new();
+            for (k, id) in ids.iter().enumerate() {
+                let s = super::find(id).unwrap();
+                cells += &format!("<g transform='translate({},10) scale(3)'>{}</g>", k as f32 * 320.0 + 10.0, s.svg);
+            }
+            let w = ids.len() as u32 * 320 + 10;
+            let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='320'><rect width='100%' height='100%' fill='#ddd'/>{cells}</svg>");
+            let tree = resvg::usvg::Tree::from_str(&svg, crate::export::usvg_options()).unwrap();
+            let mut pm = resvg::tiny_skia::Pixmap::new(w, 320).unwrap();
+            resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pm.as_mut());
+            pm.save_png(std::path::Path::new(&dir).join("symbole_gross.png")).unwrap();
+        }
     }
 }
