@@ -63,7 +63,9 @@ fn punkte(a: &Value, k: &str) -> Result<Vec<Pos>, String> {
 
 pub fn laden(p: &str) -> Result<Doc, String> {
     let s = std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?;
-    serde_json::from_str(&s).map_err(|e| format!("{p}: keine gültige Plandatei ({e})"))
+    let mut doc: Doc = serde_json::from_str(&s).map_err(|e| format!("{p}: keine gültige Plandatei ({e})"))?;
+    crate::templates::nach_laden(&mut doc);
+    Ok(doc)
 }
 
 /// Atomar speichern (temporäre Datei + Umbenennen), damit ein geöffnetes Programm nie eine halbe Datei liest.

@@ -556,6 +556,7 @@ impl App {
         match d.zweck {
             Zweck::PlanOeffnen => match plan(&d) {
                 Ok(mut doc) => {
+                    templates::nach_laden(&mut doc);
                     // Legende um Zeichen ergänzen, die noch nicht eingetragen sind (z. B. ältere oder fremd erstellte Dateien)
                     ops::sync_legend(&mut doc);
                     let mut tab = DocTab::new(doc, d.pfad.clone());
@@ -721,7 +722,8 @@ impl App {
     pub fn reload_tab(&mut self, i: usize) {
         let Some(p) = self.tabs[i].path.clone() else { return };
         // halb geschriebene Datei: beim nächsten Durchlauf erneut versuchen
-        let Ok(doc) = std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(&s).map_err(|e| e.to_string())) else { return };
+        let Ok(mut doc) = std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Doc>(&s).map_err(|e| e.to_string())) else { return };
+        templates::nach_laden(&mut doc);
         let t = &mut self.tabs[i];
         t.undo.push(std::mem::replace(&mut t.doc, doc));
         t.redo.clear();

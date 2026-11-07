@@ -538,7 +538,7 @@ pub fn obj_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, o: &'a Obj, printing: bo
             }
             // Grundeinheit aus der Feldgröße (die Rahmenvorlage rechnet in A3-Einheiten)
             match art {
-                BlockArt::Regeln => crate::templates::regeln_prims(out, bb, (bb.w() / 85.0).clamp(0.3, 3.0)),
+                BlockArt::Regeln => crate::templates::regeln_prims(out, doc, bb),
                 BlockArt::Schriftfeld => crate::templates::schriftfeld_prims(out, doc, bb, (bb.w() / 85.0).clamp(0.3, 3.0)),
                 BlockArt::Notruf => crate::templates::notruf_prims(out, doc, bb),
                 BlockArt::Sammelstelle => crate::templates::sammel_prims(out, doc, bb, (bb.h() / 25.0).clamp(0.3, 3.0)),
