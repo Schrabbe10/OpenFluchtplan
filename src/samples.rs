@@ -48,6 +48,9 @@ impl B {
         self.add(ObjKind::Text { pos: Pos::new(x, y), text: t.into(), size, bold: false, italic: false, align: TAlign::Links, rot: 0.0 }, Style::line(farbe::SCHWARZ, 0.2), 5);
     }
     fn done(mut self) -> Doc {
+        if crate::templates::layout(&self.doc).rules.is_some() {
+            crate::templates::inhalt_einpassen(&mut self.doc);
+        }
         ops::sync_legend(&mut self.doc);
         self.doc
     }

@@ -374,11 +374,11 @@ fn schnittstelle_werkzeuge() {
 #[ignore = "Sichtprüfung"]
 fn a4_rahmen_als_bild() {
     let Ok(dir) = std::env::var("FLUCHTPLAN_TESTBILD") else { return };
-    for (name, ls) in [("a4_quer", true), ("a4_hoch", false), ("a3_quer", true)] {
+    for (name, ls) in [("a4_quer", true), ("a4_hoch", false), ("a3_quer", true), ("a3_hoch", false)] {
         let mut d = crate::samples::flucht_rettungsplan();
-        if name.starts_with("a4") {
+        if name != "a3_quer" {
             let alt = crate::templates::layout(&d).plan;
-            d.page = Page { format: PaperFormat::A4, landscape: ls };
+            d.page = Page { format: if name.starts_with("a4") { PaperFormat::A4 } else { PaperFormat::A3 }, landscape: ls };
             crate::templates::inhalt_umsetzen(&mut d, alt);
         }
         let png = crate::export::render_png(&d, 100.0).unwrap();
@@ -389,16 +389,54 @@ fn a4_rahmen_als_bild() {
     }
 }
 
+/// Ältere Datei (Version 2) mit Inhalt im früheren, größeren Planbereich: Inhalt wird beim Laden eingepasst.
+#[test]
+fn alte_datei_wird_eingepasst() {
+    let mut d = samples::flucht_rettungsplan();
+    let plan = templates::layout(&d).plan;
+    // Inhalt nach unten in den Bereich der Verhaltensregeln schieben (so lag er bei Version 2)
+    for o in &mut d.objects {
+        ops::translate(&mut o.kind, Pos::new(0.0, 40.0));
+    }
+    d.version = 2;
+    templates::nach_laden(&mut d);
+    assert_eq!(d.version, 3);
+    let bb = d.objects.iter().fold(BBox::EMPTY, |bb, o| bb.union(ops::bounds_doc(&d, &o.kind)));
+    assert!(bb.inside(&plan.expand(0.5)), "{bb:?} nicht in {plan:?}");
+    // aktuelle Dateien bleiben unverändert
+    let vorher = d.objects.clone();
+    templates::nach_laden(&mut d);
+    assert_eq!(vorher, d.objects);
+}
+
+/// Verhaltensregeln: breite Felder nebeneinander, schmale untereinander – immer innerhalb des Felds.
+#[test]
+fn verhaltensregeln_im_feld() {
+    let d = samples::flucht_rettungsplan();
+    for rb in [BBox::from_two(Pos::new(0.0, 0.0), Pos::new(200.0, 100.0)), BBox::from_two(Pos::new(10.0, 10.0), Pos::new(90.0, 210.0))] {
+        let mut out = Vec::new();
+        templates::regeln_prims(&mut out, &d, rb);
+        assert!(out.len() > 40);
+        for p in &out {
+            if let crate::render::Prim::Text { pos, text, size, .. } = p {
+                assert!(pos.y >= rb.min.y && pos.y + size <= rb.max.y + 0.01, "{text} ragt heraus");
+                assert!(pos.x >= rb.min.x - ops::text_width(text, *size) && pos.x <= rb.max.x, "{text} ragt heraus");
+            }
+        }
+    }
+}
+
 /// Wechsel A3 → A4: Inhalt liegt danach im neuen Planbereich, Maßstab angepasst, Legende vollständig.
 #[test]
 fn formatwechsel_auf_a4() {
     for ls in [true, false] {
         let mut d = crate::samples::flucht_rettungsplan();
         let alt = crate::templates::layout(&d).plan;
+        let massstab = d.scale_n;
         d.page = Page { format: PaperFormat::A4, landscape: ls };
         let f = crate::templates::inhalt_umsetzen(&mut d, alt).unwrap();
         assert!(f < 1.0);
-        assert!((d.scale_n - (100.0 / f).round()).abs() < 0.5);
+        assert!((d.scale_n - (massstab / f).round()).abs() < 0.5);
         let neu = crate::templates::layout(&d).plan.expand(0.5);
         for o in &d.objects {
             let b = crate::ops::bounds_doc(&d, &o.kind);

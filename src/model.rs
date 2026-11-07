@@ -532,7 +532,7 @@ pub struct Doc {
 impl Default for Doc {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             info: PlanInfo::default(),
             page: Page {
                 format: PaperFormat::A3,

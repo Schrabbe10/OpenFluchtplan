@@ -4,18 +4,151 @@ use crate::geom::*;
 use crate::model::*;
 use crate::render::{Prim, Prims, fill_rect, frame_rect, legend_prims, line, text};
 
-pub const REGELN_BRAND: [&str; 8] = [
-    "Ruhe bewahren",
-    "Brand melden (Notruf / Brandmelder)",
-    "Gefährdete Personen warnen",
-    "Türen schließen, nicht abschließen",
-    "Gekennzeichneten Fluchtwegen folgen",
-    "Keine Aufzüge benutzen",
-    "Sammelstelle aufsuchen",
-    "Löschversuch nur ohne Eigengefährdung",
-];
+/// Eine Zeile rechts im Schritt: optional ein Zeichen davor, `notruf` setzt die Notrufnummer ein.
+struct Zeile {
+    sym: Option<&'static str>,
+    text: &'static str,
+    fett: bool,
+    notruf: bool,
+}
 
-pub const REGELN_UNFALL: [&str; 4] = ["Ruhe bewahren", "Unfall melden", "Erste Hilfe leisten", "Anweisungen beachten"];
+const fn z(text: &'static str) -> Zeile {
+    Zeile { sym: None, text, fett: false, notruf: false }
+}
+const fn zs(sym: &'static str, text: &'static str) -> Zeile {
+    Zeile { sym: Some(sym), text, fett: false, notruf: false }
+}
+const fn zf(text: &'static str) -> Zeile {
+    Zeile { sym: None, text, fett: true, notruf: false }
+}
+const fn tel(sym: &'static str) -> Zeile {
+    Zeile { sym: Some(sym), text: "Notruf: ", fett: true, notruf: true }
+}
+
+/// Nummerierter Schritt mit Überschrift links (Zeilenumbruch mit \n).
+struct Schritt {
+    titel: &'static str,
+    zeilen: &'static [Zeile],
+}
+
+struct Kasten {
+    titel: &'static str,
+    farbe: Color,
+    schritte: &'static [Schritt],
+}
+
+const BRANDFALL: Kasten = Kasten {
+    titel: "Verhalten im Brandfall",
+    farbe: farbe::ROT,
+    schritte: &[
+        Schritt {
+            titel: "Brand melden",
+            zeilen: &[zs("F005", "Brandmelder betätigen oder"), tel("F006"), z("Wer meldet? Was ist passiert?"), z("Wie viele Betroffene? Wo?"), zf("Warten auf Rückfragen!")],
+        },
+        Schritt {
+            titel: "In Sicherheit\nbringen",
+            zeilen: &[z("Gefährdete Personen mitnehmen"), z("Türen schließen"), zs("E002", "Gekennzeichneten\nFluchtwegen folgen"), z("Keine Aufzüge benutzen"), z("Anweisungen beachten")],
+        },
+        Schritt {
+            titel: "Löschversuch\nunternehmen",
+            zeilen: &[zs("F001", "Feuerlöscher, Löschdecke"), zs("F002", "und Wandhydranten benutzen"), z("(nur ohne Eigengefährdung)")],
+        },
+    ],
+};
+
+const UNFALL: Kasten = Kasten {
+    titel: "Verhalten bei Unfällen",
+    farbe: farbe::GRUEN,
+    schritte: &[
+        Schritt {
+            titel: "Unfall melden",
+            zeilen: &[tel("E004"), z("Wo geschah es? Was geschah?"), z("Wie viele Verletzte?"), z("Welche Verletzungen?"), zf("Warten auf Rückfragen!")],
+        },
+        Schritt { titel: "Erste Hilfe", zeilen: &[z("Unfallort absichern"), zs("E003", "Verletzte versorgen"), z("Anweisungen beachten")] },
+        Schritt { titel: "Weitere\nMaßnahmen", zeilen: &[z("Rettungsdienst einweisen"), z("Schaulustige entfernen")] },
+    ],
+};
+
+// Maße eines Kastens in Grundeinheiten (1 = A3)
+const K_BREITE: f32 = 90.0;
+const K_RAND: f32 = 2.2;
+const K_PAD: f32 = 2.2;
+const K_KOPF: f32 = 12.5;
+const K_SCHRITT_PAD: f32 = 1.4;
+/// Breite der Spalte mit Nummer und Überschrift; danach folgen Zeichen und Text
+const K_TITELSPALTE: f32 = 25.0;
+const K_SYM: f32 = 6.4;
+const K_TEXT: f32 = 2.8;
+
+fn zeilen_hoehe(z: &Zeile) -> f32 {
+    let n = z.text.lines().count().max(1) as f32;
+    let t = n * K_TEXT * 1.3 + 0.2 * K_TEXT;
+    if z.sym.is_some() { t.max(K_SYM + 1.0) } else { t }
+}
+
+fn schritt_hoehe(s: &Schritt) -> f32 {
+    let rechts: f32 = s.zeilen.iter().map(zeilen_hoehe).sum();
+    let links = 5.0 + (s.titel.lines().count() as f32 - 1.0) * K_TEXT * 1.25;
+    rechts.max(links) + 2.0 * K_SCHRITT_PAD
+}
+
+fn kasten_hoehe(k: &Kasten) -> f32 {
+    2.0 * K_RAND + 2.0 * K_PAD + K_KOPF + k.schritte.iter().map(schritt_hoehe).sum::<f32>()
+}
+
+/// Einen farbig umrandeten Kasten (Brandfall oder Unfall) in `bb` zeichnen; `k` = Maßstab der Grundeinheit.
+fn kasten_prims(out: &mut Prims, kasten: &Kasten, bb: BBox, k: f32, notruf: &str) {
+    let f = kasten.farbe;
+    fill_rect(out, bb.min, bb.max, f);
+    let r = K_RAND * k;
+    let inn = BBox::from_two(bb.min + Pos::new(r, r), bb.max - Pos::new(r, r));
+    fill_rect(out, inn.min, inn.max, farbe::WEISS);
+    let x0 = inn.min.x + K_PAD * k;
+    let x1 = inn.max.x - K_PAD * k;
+    let cx = inn.center().x;
+    let mut y = inn.min.y + K_PAD * k;
+    text(out, Pos::new(cx, y), kasten.titel, 4.6 * k, farbe::SCHWARZ, TAlign::Mitte, true);
+    text(out, Pos::new(cx, y + 6.2 * k), "Ruhe bewahren", 3.5 * k, farbe::SCHWARZ, TAlign::Mitte, false);
+    y += K_KOPF * k;
+    // übrigen Platz gleichmäßig auf die Schritte verteilen
+    let natur: f32 = kasten.schritte.iter().map(schritt_hoehe).sum::<f32>() * k;
+    let rest = ((inn.max.y - K_PAD * k - y) - natur).max(0.0) / kasten.schritte.len() as f32;
+    let ts = K_TEXT * k;
+    for (i, s) in kasten.schritte.iter().enumerate() {
+        line(out, Pos::new(x0, y), Pos::new(x1, y), 0.45 * k, f);
+        let h = schritt_hoehe(s) * k + rest;
+        let mut yy = y + K_SCHRITT_PAD * k + rest * 0.5;
+        // Nummer und Überschrift
+        text(out, Pos::new(x0, yy - 0.3 * k), format!("{}.", i + 1), 4.6 * k, farbe::SCHWARZ, TAlign::Links, false);
+        for (j, l) in s.titel.lines().enumerate() {
+            text(out, Pos::new(x0 + 4.6 * k, yy + 1.2 * k + j as f32 * ts * 1.25), l, ts * 1.05, farbe::SCHWARZ, TAlign::Links, false);
+        }
+        // Zeilen rechts, Text bündig hinter der Zeichenspalte
+        let xs = x0 + K_TITELSPALTE * k;
+        let xt = xs + (K_SYM + 1.2) * k;
+        for zl in s.zeilen {
+            let zh = zeilen_hoehe(zl) * k;
+            let n = zl.text.lines().count().max(1) as f32;
+            let ty = yy + (zh - n * ts * 1.3) / 2.0 + 0.1 * ts;
+            if let Some(id) = zl.sym {
+                let sz = K_SYM * k;
+                out.push(Prim::Symbol { id: id.into(), c: Pos::new(xs + sz / 2.0, yy + zh / 2.0), size: sz, rot: 0.0 });
+            }
+            if zl.notruf {
+                text(out, Pos::new(xt, ty), format!("{}{}", zl.text, notruf), ts * 1.15, f, TAlign::Links, true);
+            } else {
+                for (j, l) in zl.text.lines().enumerate() {
+                    text(out, Pos::new(xt, ty + j as f32 * ts * 1.3), l, ts, farbe::SCHWARZ, TAlign::Links, zl.fett);
+                }
+            }
+            yy += zh;
+        }
+        y += h;
+    }
+}
+
+/// Höhe des Bands mit den Verhaltensregeln (Grundeinheiten, 1 = A3).
+const BAND_REGELN: f32 = 96.0;
 
 /// Bereiche eines Rahmens.
 pub struct Layout {
@@ -49,14 +182,35 @@ pub fn layout(doc: &Doc) -> Layout {
             l.header = Some(b(m, m, w - m, m + hh));
             let top = m + hh + gap + 8.0 * u;
             let brand = doc.frame == FrameKind::BrandschutzVollstaendig;
-            if w >= h {
+            let regeln = cfg.show_rules && !brand;
+            if w >= h && regeln {
+                // Quer mit Verhaltensregeln (wie bisherige Pläne): links Notruf + Legende,
+                // unten breites Band mit Brandfall/Unfall nebeneinander, rechts daneben Sammelstelle und Schriftfeld
                 let lw = (w * 0.23).max(80.0 * u);
                 let x1 = m + lw;
                 let mut y = m + hh + gap;
-                if cfg.show_rules && !brand {
-                    l.rules = Some(b(m, y, x1, y + 87.0 * u));
-                    y += 87.0 * u + gap * 0.6;
+                if cfg.show_notruf {
+                    l.notruf = Some(b(m, y, x1, y + 17.0 * u));
+                    y += 17.0 * u + gap;
                 }
+                l.legend = Some(b(m, y, x1, h - m));
+                let px = x1 + gap * 1.4;
+                let by = h - m - BAND_REGELN * u;
+                l.plan = b(px, top, w - m, by - gap);
+                let rw = (185.0 * u).min((w - m - px) * 0.64);
+                l.rules = Some(b(px, by, px + rw, h - m));
+                let kx = px + rw + gap;
+                if cfg.show_sammelstelle {
+                    let sy = by + (h - m - by) * 0.4;
+                    l.sammel = Some(b(kx, by, w - m, sy));
+                    l.kopf = Some(b(kx, sy + gap * 0.5, w - m, h - m));
+                } else {
+                    l.kopf = Some(b(kx, by, w - m, h - m));
+                }
+            } else if w >= h {
+                let lw = (w * 0.23).max(80.0 * u);
+                let x1 = m + lw;
+                let mut y = m + hh + gap;
                 if cfg.show_notruf && !brand {
                     l.notruf = Some(b(m, y, x1, y + 17.0 * u));
                     y += 17.0 * u + gap;
@@ -69,18 +223,37 @@ pub fn layout(doc: &Doc) -> Layout {
                     l.sammel = Some(b(px, bottom, px + (w - m - px) * 0.5, h - m));
                 }
                 l.kopf = Some(b(w - m - (w - m - px) * 0.45, bottom, w - m, h - m));
+            } else if regeln {
+                // Hoch mit Verhaltensregeln: oben Brandfall/Unfall über zwei Spalten + Legende,
+                // darunter Notruf, Sammelstelle und Schriftfeld
+                let r1 = BAND_REGELN * u;
+                let r2 = 34.0 * u;
+                let by = h - m - r1 - gap - r2;
+                l.plan = b(m, top, w - m, by - gap);
+                let cw = (w - 2.0 * m - 2.0 * gap) / 3.0;
+                let x0 = m;
+                let kx = x0 + 2.0 * (cw + gap);
+                l.rules = Some(b(x0, by, kx - gap, by + r1));
+                l.legend = Some(b(kx, by, w - m, by + r1));
+                let y2 = by + r1 + gap;
+                l.kopf = Some(b(kx, y2, w - m, h - m));
+                match (cfg.show_notruf, cfg.show_sammelstelle) {
+                    (true, true) => {
+                        l.notruf = Some(b(x0, y2, x0 + cw, y2 + 17.0 * u));
+                        l.sammel = Some(b(x0 + cw + gap, y2, kx - gap, h - m));
+                    }
+                    (true, false) => l.notruf = Some(b(x0, y2, kx - gap, y2 + 17.0 * u)),
+                    (false, true) => l.sammel = Some(b(x0, y2, kx - gap, h - m)),
+                    (false, false) => {}
+                }
             } else {
-                // Hochformat: Band unten etwas höher, damit die Verhaltensregeln Platz haben
-                let band = if cfg.show_rules && !brand { 88.0 } else { 75.0 } * u;
+                let band = 75.0 * u;
                 let by = h - m - band;
                 l.plan = b(m, top, w - m, by - gap);
                 let cw = (w - 2.0 * m - 2.0 * gap) / 3.0;
                 let x0 = m;
-                if cfg.show_rules && !brand {
-                    l.rules = Some(b(x0, by, x0 + cw, h - m - 20.0 * u));
-                    if cfg.show_notruf {
-                        l.notruf = Some(b(x0, h - m - 17.0 * u, x0 + cw, h - m));
-                    }
+                if cfg.show_notruf && !brand {
+                    l.notruf = Some(b(x0, h - m - 17.0 * u, x0 + cw, h - m));
                 }
                 l.legend = Some(b(x0 + cw + gap, by, x0 + 2.0 * cw + gap, h - m));
                 let kx = x0 + 2.0 * (cw + gap);
@@ -118,6 +291,34 @@ pub fn layout(doc: &Doc) -> Layout {
     l
 }
 
+/// Inhalt, der über den Planbereich hinausragt, mittig in den Planbereich einpassen.
+/// Sicherheitszeichen behalten ihre Größe (Mindestgröße für die Lesbarkeit).
+pub fn inhalt_einpassen(doc: &mut Doc) -> Option<f32> {
+    let plan = layout(doc).plan;
+    let inhalt = doc.objects.iter().fold(BBox::EMPTY, |bb, o| bb.union(crate::ops::bounds_doc(doc, &o.kind)));
+    if inhalt.is_empty() || inhalt.inside(&plan.expand(0.5)) {
+        return None;
+    }
+    let f = inhalt_umsetzen(doc, inhalt.expand(3.0))?;
+    for o in &mut doc.objects {
+        if let ObjKind::Symbol { size, .. } = &mut o.kind {
+            *size /= f;
+        }
+    }
+    Some(f)
+}
+
+/// Ältere Plandateien angleichen. Version 3: Verhaltensregeln als Band (Planbereich bei
+/// Flucht- und Rettungsplänen mit Regeln kleiner) – überstehenden Inhalt einpassen.
+pub fn nach_laden(doc: &mut Doc) {
+    if doc.version < 3 {
+        if layout(doc).rules.is_some() {
+            inhalt_einpassen(doc);
+        }
+        doc.version = 3;
+    }
+}
+
 /// Planinhalt nach einem Wechsel von Format oder Rahmen in den neuen Planbereich übertragen
 /// (gleichmäßig skaliert, mittig). Der Maßstab wird entsprechend angepasst. Liefert den Faktor.
 pub fn inhalt_umsetzen(doc: &mut Doc, alt: BBox) -> Option<f32> {
@@ -145,28 +346,27 @@ fn white_box(out: &mut Prims, bb: BBox, line_w: f32) {
     frame_rect(out, bb.min, bb.max, line_w, farbe::SCHWARZ);
 }
 
-/// Verhaltensregeln (Brandfall, Unfälle) in ein Feld setzen; `u` ist die Grundeinheit (1 = A3).
-pub fn regeln_prims(out: &mut Prims, rb: BBox, u: f32) {
-    // Schrift verkleinern, wenn das Feld (z. B. bei A4 hoch) nicht für alle Regeln reicht
-    let zeilen = (REGELN_BRAND.len() + REGELN_UNFALL.len()) as f32;
-    let bedarf = (3.0 + 7.0 + 3.0 + 7.0 + 2.0) * u + zeilen * 3.2 * u * 1.5;
-    let k = (rb.h() / bedarf).min(1.0);
-    let u = u * k;
-    let s = 3.2 * u;
-    let mut y = rb.min.y + 3.0 * u;
-    let x = rb.min.x + 3.0 * u;
-    text(out, Pos::new(x, y), "Verhalten im Brandfall", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
-    y += 7.0 * u;
-    for r in REGELN_BRAND {
-        text(out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
-        y += s * 1.5;
+/// Verhaltensregeln (Brandfall, Unfälle) als zwei farbig umrandete Kästen in ein Feld setzen.
+/// Breite Felder: nebeneinander, schmale: untereinander. Die Größe passt sich dem Feld an.
+pub fn regeln_prims(out: &mut Prims, doc: &Doc, rb: BBox) {
+    if rb.w() <= 0.0 || rb.h() <= 0.0 {
+        return;
     }
-    y += 3.0 * u;
-    text(out, Pos::new(x, y), "Verhalten bei Unfällen", 4.5 * u, farbe::SCHWARZ, TAlign::Links, true);
-    y += 7.0 * u;
-    for r in REGELN_UNFALL {
-        text(out, Pos::new(x + u, y), format!("• {r}"), s, farbe::SCHWARZ, TAlign::Links, false);
-        y += s * 1.5;
+    let (h1, h2) = (kasten_hoehe(&BRANDFALL), kasten_hoehe(&UNFALL));
+    let g = 3.0;
+    let k_neben = (rb.w() / (2.0 * K_BREITE + g)).min(rb.h() / h1.max(h2));
+    let k_unter = (rb.w() / K_BREITE).min(rb.h() / (h1 + h2 + g));
+    let notruf = doc.info.notruf.as_str();
+    if k_neben >= k_unter {
+        let k = k_neben;
+        let bw = (rb.w() - g * k) / 2.0;
+        kasten_prims(out, &BRANDFALL, BBox::from_two(rb.min, Pos::new(rb.min.x + bw, rb.max.y)), k, notruf);
+        kasten_prims(out, &UNFALL, BBox::from_two(Pos::new(rb.max.x - bw, rb.min.y), rb.max), k, notruf);
+    } else {
+        let k = k_unter;
+        let ym = rb.min.y + (rb.h() - g * k) * h1 / (h1 + h2);
+        kasten_prims(out, &BRANDFALL, BBox::from_two(rb.min, Pos::new(rb.max.x, ym)), k, notruf);
+        kasten_prims(out, &UNFALL, BBox::from_two(Pos::new(rb.min.x, ym + g * k), rb.max), k, notruf);
     }
 }
 
@@ -302,8 +502,7 @@ pub fn frame_prims(doc: &Doc) -> Prims<'_> {
     }
 
     if let Some(rb) = l.rules {
-        white_box(&mut out, rb, 0.4);
-        regeln_prims(&mut out, rb, u);
+        regeln_prims(&mut out, doc, rb);
     }
     if let Some(nb) = l.notruf {
         notruf_prims(&mut out, doc, nb);
