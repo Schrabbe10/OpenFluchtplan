@@ -1651,7 +1651,7 @@ fn kind_ui(ui: &mut egui::Ui, k: &mut ObjKind, focus: bool, scale_n: f32) {
         ObjKind::Legend { cols, size, .. } => {
             ui.add(egui::DragValue::new(cols).range(1..=8).prefix("Spalten "));
             ui.add(egui::DragValue::new(size).range(1.0..=20.0).speed(0.1).prefix("Schrift ").suffix(" mm"));
-            ui.label(RichText::new("Inhalt über „Legende …“ (Assistent) bearbeiten.").weak().small());
+            ui.label(RichText::new("Einträge ein-/ausblenden, umbenennen, sortieren: Doppelklick auf die Legende oder „Legende …“.").weak().small());
         }
         ObjKind::Grid { nx, ny, .. } => {
             ui.add(egui::DragValue::new(nx).range(1..=26).prefix("Felder waagerecht "));

@@ -605,6 +605,27 @@ pub fn used_legend_keys(doc: &Doc) -> Vec<(String, String)> {
 }
 
 /// Legende abgleichen: neue Einträge anhängen, Reihenfolge und Texte des Nutzers behalten.
+/// Übliche Kantenlänge der Sicherheitszeichen im Plan (Median, ohne Nordpfeile und Legende);
+/// `None` bei weniger als zwei Zeichen.
+pub fn typische_symbolgroesse(doc: &Doc) -> Option<f32> {
+    fn sammeln(objs: &[Obj], out: &mut Vec<f32>) {
+        for o in objs {
+            match &o.kind {
+                ObjKind::Symbol { id, size, .. } if !(id.starts_with('N') && id.len() <= 2) => out.push(*size),
+                ObjKind::Group { children } => sammeln(children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut v = Vec::new();
+    sammeln(&doc.objects, &mut v);
+    if v.len() < 2 {
+        return None;
+    }
+    v.sort_by(f32::total_cmp);
+    Some((v[v.len() / 2] * 10.0).round() / 10.0)
+}
+
 pub fn sync_legend(doc: &mut Doc) {
     let used = used_legend_keys(doc);
     for (key, label) in &used {

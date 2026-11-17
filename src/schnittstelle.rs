@@ -406,7 +406,7 @@ pub fn ausfuehren(name: &str, a: &Value) -> Erg {
             if symbols::find(&id).is_none() && !doc.custom_symbols.iter().any(|c| c.id == id) {
                 return Err(format!("Symbol „{id}“ unbekannt – mit symbol_suchen nachsehen."));
             }
-            let kind = ObjKind::Symbol { id: id.clone(), pos: Pos::new(f(a, "x")?, f(a, "y")?), size: f_opt(a, "groesse").unwrap_or(8.0), rot: f_opt(a, "drehung").unwrap_or(0.0) };
+            let kind = ObjKind::Symbol { id: id.clone(), pos: Pos::new(f(a, "x")?, f(a, "y")?), size: f_opt(a, "groesse").or_else(|| ops::typische_symbolgroesse(doc)).unwrap_or(8.0), rot: f_opt(a, "drehung").unwrap_or(0.0) };
             let layer = auto_layer(doc, &kind);
             let oid = doc.add(kind, Style::NONE, layer);
             Ok(format!("Symbol {id} eingefügt, ID {oid}."))

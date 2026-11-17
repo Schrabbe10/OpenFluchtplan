@@ -145,7 +145,9 @@ impl App {
             Tool::Rail => (ObjKind::Rail { pts: pts.to_vec() }, Style::line(farbe::SCHWARZ, 0.25)),
             Tool::Text => (ObjKind::Text { pos: p0, text: "Text".into(), size: s.text_mm, bold: false, italic: false, align: TAlign::Links, rot: 0.0 }, Style::line(farbe::SCHWARZ, 0.2)),
             Tool::Symbol(id) => {
-                let size = if id.starts_with("N") && id.len() <= 2 { s.symbol_mm * 2.0 } else { s.symbol_mm };
+                // Größe wie die vorhandenen Zeichen im Plan (z. B. nach Import), sonst Standard aus den Optionen
+                let basis = ops::typische_symbolgroesse(doc).unwrap_or(s.symbol_mm);
+                let size = if id.starts_with("N") && id.len() <= 2 { basis * 2.0 } else { basis };
                 (ObjKind::Symbol { id: id.clone(), pos: p0, size, rot: 0.0 }, Style::NONE)
             }
             Tool::Note => (ObjKind::Note { pos: p0, text: "Notiz".into() }, Style::NONE),
@@ -742,12 +744,18 @@ impl App {
         }
         if resp.double_clicked() {
             let tab = self.tab();
-            if tab.sel.len() == 1 {
-                if let Some(o) = tab.doc.objects.iter().find(|o| o.id == tab.sel[0]) {
-                    if matches!(o.kind, ObjKind::Text { .. } | ObjKind::Note { .. } | ObjKind::Room { .. } | ObjKind::QrCode { .. }) {
-                        self.focus_text = true;
-                    }
-                }
+            let (text, legende) = match tab.sel.as_slice() {
+                [id] => tab.doc.objects.iter().find(|o| o.id == *id).map_or((false, false), |o| {
+                    (matches!(o.kind, ObjKind::Text { .. } | ObjKind::Note { .. } | ObjKind::Room { .. } | ObjKind::QrCode { .. }), matches!(o.kind, ObjKind::Legend { .. }))
+                }),
+                _ => (false, false),
+            };
+            if text {
+                self.focus_text = true;
+            }
+            // Doppelklick auf die Legende: Einträge ein-/ausblenden, umbenennen, sortieren
+            if legende {
+                self.dlg.legend = true;
             }
         }
     }

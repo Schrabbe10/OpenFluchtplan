@@ -222,6 +222,8 @@ struct Muster {
     strafe: f32,
     /// Seitenverhältnis (Breite/Höhe) des Zeichens im Plan
     seiten: f32,
+    /// Text im Zeichen (normiert), z. B. „30S“ – unterscheidet sonst gleich aussehende Zeichen
+    text: String,
 }
 
 /// Schwelle für Zeichen, die einem Muster aus der Legende des Plans gleichen (gleicher Ersteller)
@@ -233,9 +235,13 @@ fn vergleichen(doc: &Doc, o: &Obj, muster: &[Muster]) -> Option<(&'static str, f
     let (bild, b) = bild_von(doc, o)?;
     let mut best: Option<(&'static str, f32, f32)> = None;
     let seiten = b.w() / b.h().max(0.01);
+    let mut eigener_text = String::new();
+    obj_text(o, &mut eigener_text);
+    let eigener_text = text_norm(&eigener_text);
     for m in muster.iter().filter(|m| {
         let q = seiten / m.seiten;
-        (0.75..=1.33).contains(&q)
+        // Zeichen mit Text (z. B. Türklasse „30“ / „30S“) nur bei gleichem Text
+        (0.75..=1.33).contains(&q) && (m.text.is_empty() || eigener_text.is_empty() || m.text == eigener_text)
     }) {
         let r = abstand(&bild, &m.bild) / SCHWELLE_GELERNT + m.strafe;
         if best.is_none_or(|t| r < t.2) {
@@ -332,6 +338,22 @@ fn begriff_norm(s: &str) -> String {
 /// Zeichen, die zu einem Legendentext passen
 fn ids_fuer_text(text: &str) -> Vec<&'static str> {
     let t = begriff_norm(text);
+    // Feuer-/Rauchschutztüren (DIN 14034-6): die Klasse ergibt sich aus der Kombination der Begriffe
+    if t.contains("tür") || t.contains("tuer") {
+        let rauch = t.contains("rauchdicht") || t.contains("rauchschutz");
+        let tuer = if t.contains("feuerbeständig") || t.contains("feuerbestaendig") || t.contains("t90") {
+            Some(if rauch { "FW_TUER_90S" } else { "FW_TUER_90" })
+        } else if t.contains("feuerhemmend") || t.contains("t30") {
+            Some(if rauch { "FW_TUER_30S" } else { "FW_TUER_30" })
+        } else if rauch {
+            Some("FW_TUER_S")
+        } else {
+            None
+        };
+        if let Some(id) = tuer {
+            return vec![id];
+        }
+    }
     let mut out: Vec<&'static str> = Vec::new();
     for (k, ids) in BEGRIFFE {
         if t.contains(k) {
@@ -407,6 +429,9 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
         }
         let Some((bild, inhalt)) = bild_von(doc, o) else { continue };
         let seiten = inhalt.w() / inhalt.h().max(0.01);
+        let mut zeichen_text = String::new();
+        obj_text(o, &mut zeichen_text);
+        let zeichen_text = text_norm(&zeichen_text);
         // unter den passenden Zeichen das ähnlichste wählen; ein Richtungspfeil nur bei klarer
         // Ähnlichkeit (zu „Rettungsweg / Notausgang“ gehören Pfeil und Notausgangszeichen)
         let mut wahl: Vec<(&'static str, f32)> = ids.iter().filter_map(|id| vorlage(id, 0.0).map(|v| (*id, abstand(&bild, &v.bild)))).collect();
@@ -426,7 +451,7 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
         let mut bb = bild.clone();
         for k in 0..4 {
             let s = if k % 2 == 0 { seiten } else { 1.0 / seiten };
-            out.push(Muster { id, rot: k as f32 * 90.0, bild: bb.clone(), strafe: if k == 0 { 0.0 } else { strafe }, seiten: s });
+            out.push(Muster { id, rot: k as f32 * 90.0, bild: bb.clone(), strafe: if k == 0 { 0.0 } else { strafe }, seiten: s, text: zeichen_text.clone() });
             bb = drehen(&bb);
         }
         let gegen = match id {
@@ -435,7 +460,7 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
             _ => None,
         };
         if let Some(g) = gegen {
-            out.push(Muster { id: g, rot: 0.0, bild: spiegeln(&bild), strafe: 0.0, seiten });
+            out.push(Muster { id: g, rot: 0.0, bild: spiegeln(&bild), strafe: 0.0, seiten, text: zeichen_text.clone() });
         }
     }
     out
@@ -522,6 +547,10 @@ fn zuordnen_gerade(doc: &Doc, o: &Obj, muster: &[Muster]) -> Option<Fund> {
     let mut best = vergleichen(doc, o, muster).map(|(id, rot, r, b)| (id, rot, r, b, None));
     if best.as_ref().is_none_or(|t| t.2 > 1.0) && (3..=40).contains(&children.len()) {
         for k in 0..children.len() {
+            // Text gehört zum Zeichen (z. B. Türklasse „30S“) – ohne ihn wäre „30S“ von „30“ nicht zu unterscheiden
+            if matches!(children[k].kind, ObjKind::Text { .. }) {
+                continue;
+            }
             let mut teil = o.clone();
             if let ObjKind::Group { children } = &mut teil.kind {
                 children.remove(k);

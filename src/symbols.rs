@@ -601,6 +601,27 @@ fn build() -> Vec<SymbolDef> {
     add("FW_SPRINKLER", Feuerwehr, "Sprinkleranlage", fw_box(&sprinkler(B), B));
     add("FW_RAUCHABZUG", Feuerwehr, "Rauchabzug", fw_box(&smoke(R), R));
     add("FW_TREPPENRAUM", Feuerwehr, "Treppenraum (notwendige Treppe)", fw_box(&stairs(R), R));
+    // Feuer- und Rauchschutztüren nach DIN 14034-6 (eigene Darstellung): Türsymbol, darunter die Klasse
+    for (id, name, klasse) in [
+        ("FW_TUER_30", "Feuerhemmende, dichtschließende Tür (T30)", "30"),
+        ("FW_TUER_30S", "Feuerhemmende, rauchdichte Tür (T30-RS)", "30S"),
+        ("FW_TUER_90", "Feuerbeständige, dichtschließende Tür (T90)", "90"),
+        ("FW_TUER_90S", "Feuerbeständige, rauchdichte Tür (T90-RS)", "90S"),
+        ("FW_TUER_S", "Rauchdichte Tür (RS)", "S"),
+    ] {
+        add(
+            id,
+            Feuerwehr,
+            name,
+            format!(
+                "<rect x='4' y='4' width='92' height='92' fill='{W}' stroke='{R}' stroke-width='6'/>\
+                 <path d='M4 66 L96 66' stroke='{K}' stroke-width='3'/>\
+                 <path d='M22 56 L78 56 M30 56 L30 16' stroke='{K}' stroke-width='5' fill='none'/>\
+                 <path d='M30 16 A40 40 0 0 1 70 56' stroke='{K}' stroke-width='3' fill='none'/>\
+                 <text x='50' y='89' font-family='Arial' font-weight='bold' font-size='24' text-anchor='middle' fill='{K}'>{klasse}</text>"
+            ),
+        );
+    }
     add("FW_BRANDWAND", Feuerwehr, "Brandwand", fw_box(&format!("<rect x='38' y='12' width='24' height='76' fill='{R}'/><path d='M26 12 L26 88 M74 12 L74 88' stroke='{R}' stroke-width='6'/>"), R));
     add("FW_ANLEITER", Feuerwehr, "Anleiterstelle", fw_box(&format!("<path d='M20 20 L80 20' stroke='{R}' stroke-width='8'/><path d='M50 20 L50 30' stroke='{R}' stroke-width='6'/>"), R));
     add("FW_HAUPTZUGANG", Feuerwehr, "Hauptzugang Feuerwehr", format!("<polygon points='6,94 50,6 94,94' fill='{K}'/>"));
