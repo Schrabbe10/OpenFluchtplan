@@ -569,6 +569,7 @@ fn build() -> Vec<SymbolDef> {
         ("FW_FSD", "FSD", "Feuerwehr-Schlüsseldepot"),
         ("FW_FSE", "FSE", "Freischaltelement"),
         ("FW_FIZ", "FIZ", "Feuerwehr-Informationszentrale"),
+        ("FW_FIBS", "FIBS", "Informationen für die Feuerwehr mit FAT und FBF (FIBS)"),
         ("FW_FGB", "FGB", "Feuerwehr-Gebäudefunkbedienfeld"),
         ("FW_SPZ", "SPZ", "Sprinklerzentrale"),
         ("FW_RWA", "RWA", "Rauch- und Wärmeabzug, Bedienstelle"),
@@ -615,10 +616,48 @@ fn build() -> Vec<SymbolDef> {
             name,
             format!(
                 "<rect x='4' y='4' width='92' height='92' fill='{W}' stroke='{R}' stroke-width='6'/>\
-                 <path d='M4 66 L96 66' stroke='{K}' stroke-width='3'/>\
-                 <path d='M22 56 L78 56 M30 56 L30 16' stroke='{K}' stroke-width='5' fill='none'/>\
-                 <path d='M30 16 A40 40 0 0 1 70 56' stroke='{K}' stroke-width='3' fill='none'/>\
-                 <text x='50' y='89' font-family='Arial' font-weight='bold' font-size='24' text-anchor='middle' fill='{K}'>{klasse}</text>"
+                 <rect x='14' y='13' width='72' height='46' fill='none' stroke='{K}' stroke-width='2.5'/>\
+                 <path d='M20 51 L80 51 M33 51 L33 22' stroke='{K}' stroke-width='3.5' fill='none'/>\
+                 <path d='M33 51 L52 24' stroke='{K}' stroke-width='3' fill='none'/>\
+                 <path d='M52 24 A33 33 0 0 1 66 51' stroke='{K}' stroke-width='2.5' fill='none'/>\
+                 <text x='50' y='88' font-family='Arial' font-size='26' text-anchor='middle' fill='{K}'>{klasse}</text>"
+            ),
+        );
+    }
+    // Feuer-/Rauchschutztore (eigene Darstellung): zweiflügeliges Tor, darunter die Klasse
+    for (id, name, klasse) in [
+        ("FW_TOR_30", "Feuerhemmendes, dichtschließendes Tor (T30)", "30"),
+        ("FW_TOR_30S", "Feuerhemmendes, rauchdichtes Tor (T30-RS)", "30S"),
+        ("FW_TOR_90", "Feuerbeständiges, dichtschließendes Tor (T90)", "90"),
+        ("FW_TOR_90S", "Feuerbeständiges, rauchdichtes Tor (T90-RS)", "90S"),
+    ] {
+        add(
+            id,
+            Feuerwehr,
+            name,
+            format!(
+                "<rect x='4' y='4' width='92' height='92' fill='{W}' stroke='{R}' stroke-width='6'/>\
+                 <rect x='14' y='13' width='72' height='46' fill='none' stroke='{K}' stroke-width='2.5'/>\
+                 <path d='M18 51 L82 51 M22 51 L22 26 M78 51 L78 26' stroke='{K}' stroke-width='3.5' fill='none'/>\
+                 <path d='M22 26 A25 25 0 0 1 47 51 M78 26 A25 25 0 0 0 53 51' stroke='{K}' stroke-width='2.5' fill='none'/>\
+                 <text x='50' y='88' font-family='Arial' font-size='26' text-anchor='middle' fill='{K}'>{klasse}</text>"
+            ),
+        );
+    }
+    // Treppenraum mit/ohne Feuerwiderstand (DIN 14034-6, eigene Darstellung); die erreichbaren
+    // Geschosse stehen als eigene Texte im Zeichen (je Treppenhaus verschieden)
+    for (id, name, strich) in [
+        ("FW_TREPPENRAUM_MIT", "Treppenraum mit Feuerwiderstand; erreichbare Geschosse", ""),
+        ("FW_TREPPENRAUM_OHNE", "Treppenraum ohne Feuerwiderstand; erreichbare Geschosse", " stroke-dasharray='3 3'"),
+    ] {
+        add(
+            id,
+            Feuerwehr,
+            name,
+            format!(
+                "<rect x='4' y='4' width='92' height='92' fill='{W}' stroke='{R}' stroke-width='6'/>\
+                 <rect x='16' y='16' width='68' height='68' fill='none' stroke='{K}' stroke-width='3'{strich}/>\
+                 <path d='M28 76 L28 64 L40 64 L40 52 L52 52 L52 40 L64 40 L64 28 L76 28' stroke='{K}' stroke-width='6' fill='none'/>"
             ),
         );
     }

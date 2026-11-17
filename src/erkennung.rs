@@ -60,6 +60,40 @@ fn svg_text(svg: &str) -> String {
     out
 }
 
+/// Zeichen, deren Texte zum einzelnen Exemplar gehören (z. B. erreichbare Geschosse im Treppenraum):
+/// verglichen wird ohne Text, die Texte bleiben beim Ersetzen erhalten.
+fn behaelt_text(id: &str) -> bool {
+    id.starts_with("FW_TREPPENRAUM_")
+}
+
+/// Treppenraum mit oder ohne Feuerwiderstand: ohne hat einen gepunkteten Innenrahmen
+/// (viele winzige dunkle Flächen), mit einen durchgehenden.
+fn treppenraum_art(teile: &[&Obj]) -> &'static str {
+    let punkte = teile
+        .iter()
+        .filter(|c| {
+            let b = ops::bounds(&c.kind);
+            matches!(c.style.fill, Fill::Farbe(f) if (f.0 as u32 + f.1 as u32 + f.2 as u32) < 200) && b.w() * b.h() < 0.5
+        })
+        .count();
+    if punkte >= 8 { "FW_TREPPENRAUM_OHNE" } else { "FW_TREPPENRAUM_MIT" }
+}
+
+fn ohne_texte(o: &Obj) -> Obj {
+    let mut o = o.clone();
+    if let ObjKind::Group { children } = &mut o.kind {
+        children.retain(|c| !matches!(c.kind, ObjKind::Text { .. }));
+    }
+    o
+}
+
+fn texte_von(o: &Obj) -> Vec<Obj> {
+    match &o.kind {
+        ObjKind::Group { children } => children.iter().filter(|c| matches!(c.kind, ObjKind::Text { .. })).cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn obj_text(o: &Obj, out: &mut String) {
     match &o.kind {
         ObjKind::Text { text, .. } => out.push_str(text),
@@ -224,6 +258,8 @@ struct Muster {
     seiten: f32,
     /// Text im Zeichen (normiert), z. B. „30S“ – unterscheidet sonst gleich aussehende Zeichen
     text: String,
+    /// Vergleich ohne Texte (siehe `behaelt_text`)
+    ohne_text: bool,
 }
 
 /// Schwelle für Zeichen, die einem Muster aus der Legende des Plans gleichen (gleicher Ersteller)
@@ -238,12 +274,24 @@ fn vergleichen(doc: &Doc, o: &Obj, muster: &[Muster]) -> Option<(&'static str, f
     let mut eigener_text = String::new();
     obj_text(o, &mut eigener_text);
     let eigener_text = text_norm(&eigener_text);
+    // Bild ohne Texte nur bei Bedarf (Muster wie Treppenraum)
+    let ohne = if muster.iter().any(|m| m.ohne_text) && !eigener_text.is_empty() { bild_von(doc, &ohne_texte(o)) } else { None };
     for m in muster.iter().filter(|m| {
         let q = seiten / m.seiten;
         // Zeichen mit Text (z. B. Türklasse „30“ / „30S“) nur bei gleichem Text
-        (0.75..=1.33).contains(&q) && (m.text.is_empty() || eigener_text.is_empty() || m.text == eigener_text)
+        (0.75..=1.33).contains(&q) && (m.ohne_text || m.text.is_empty() || eigener_text.is_empty() || m.text == eigener_text)
     }) {
-        let r = abstand(&bild, &m.bild) / SCHWELLE_GELERNT + m.strafe;
+        let vergleich = match (&ohne, m.ohne_text) {
+            (Some((ob, obb)), true) => {
+                let q = (obb.w() / obb.h().max(0.01)) / m.seiten;
+                if !(0.75..=1.33).contains(&q) {
+                    continue;
+                }
+                ob
+            }
+            _ => &bild,
+        };
+        let r = abstand(vergleich, &m.bild) / SCHWELLE_GELERNT + m.strafe;
         if best.is_none_or(|t| r < t.2) {
             best = Some((m.id, m.rot, r));
         }
@@ -327,6 +375,26 @@ const BEGRIFFE: &[(&str, &[&str])] = &[
     ("brandmeldetelefon", &["F006"]),
     ("löschdecke", &["F_LOESCHDECKE"]),
     ("brandwand", &["FW_BRANDWAND"]),
+    ("haupteingang", &["FW_HAUPTZUGANG"]),
+    ("hauptzugang", &["FW_HAUPTZUGANG"]),
+    ("nebeneingang", &["FW_ZUGANG"]),
+    ("nebenzugang", &["FW_ZUGANG"]),
+    ("gebäudezugang", &["FW_ZUGANG"]),
+    ("fibs", &["FW_FIBS"]),
+    ("informationenfürdiefeuerwehr", &["FW_FIBS"]),
+    ("rauchundwärmeabzug", &["FW_RWA"]),
+    ("brandmelderzentrale", &["FW_BMZ"]),
+    ("feuerwehrschlüsseldepot", &["FW_FSD"]),
+    ("schlüsseldepot", &["FW_FSD"]),
+    ("freischaltelement", &["FW_FSE"]),
+    ("feuerwehranzeigetableau", &["FW_FAT"]),
+    ("feuerwehrbedienfeld", &["FW_FBF"]),
+    ("sprinklerzentrale", &["FW_SPZ"]),
+    ("hauptschalter", &["FW_HAUPTSCHALTER"]),
+    ("gashaupthahn", &["FW_GASHAHN"]),
+    ("wasserhaupthahn", &["FW_WASSERHAHN"]),
+    ("überflurhydrant", &["FW_UEBERFLUR"]),
+    ("unterflurhydrant", &["FW_UNTERFLUR"]),
     ("anleiter", &["FW_ANLEITER"]),
     ("feuerleiter", &["F003"]),
 ];
@@ -338,6 +406,19 @@ fn begriff_norm(s: &str) -> String {
 /// Zeichen, die zu einem Legendentext passen
 fn ids_fuer_text(text: &str) -> Vec<&'static str> {
     let t = begriff_norm(text);
+    if t.contains("treppenraum") && t.contains("feuerwiderstand") {
+        return vec![if t.contains("ohne") { "FW_TREPPENRAUM_OHNE" } else { "FW_TREPPENRAUM_MIT" }];
+    }
+    // Feuer-/Rauchschutztore (wie Türen, eigenes Zeichen)
+    if t.ends_with("tor") || t.contains("tor ") || t.contains("schiebetor") || t.contains("rolltor") {
+        let rauch = t.contains("rauchdicht");
+        if t.contains("feuerbeständig") || t.contains("feuerbestaendig") {
+            return vec![if rauch { "FW_TOR_90S" } else { "FW_TOR_90" }];
+        }
+        if t.contains("feuerhemmend") {
+            return vec![if rauch { "FW_TOR_30S" } else { "FW_TOR_30" }];
+        }
+    }
     // Feuer-/Rauchschutztüren (DIN 14034-6): die Klasse ergibt sich aus der Kombination der Begriffe
     if t.contains("tür") || t.contains("tuer") {
         let rauch = t.contains("rauchdicht") || t.contains("rauchschutz");
@@ -427,10 +508,15 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
         if ids.is_empty() {
             continue;
         }
-        let Some((bild, inhalt)) = bild_von(doc, o) else { continue };
+        // Zeichen mit exemplarbezogenen Texten (Treppenraum) ohne diese Texte lernen
+        let ohne_text = ids.iter().all(|id| behaelt_text(id));
+        let probe = if ohne_text { ohne_texte(o) } else { o.clone() };
+        let Some((bild, inhalt)) = bild_von(doc, &probe) else { continue };
         let seiten = inhalt.w() / inhalt.h().max(0.01);
         let mut zeichen_text = String::new();
-        obj_text(o, &mut zeichen_text);
+        if !ohne_text {
+            obj_text(o, &mut zeichen_text);
+        }
         let zeichen_text = text_norm(&zeichen_text);
         // unter den passenden Zeichen das ähnlichste wählen; ein Richtungspfeil nur bei klarer
         // Ähnlichkeit (zu „Rettungsweg / Notausgang“ gehören Pfeil und Notausgangszeichen)
@@ -442,7 +528,10 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
         // Feuerwehrzeichen (DIN 14034) werden sehr unterschiedlich gezeichnet; steht nur eines zur
         // Wahl, belegt der Legendentext die Zuordnung (z. B. Anleiterstelle als Leiter statt Balken)
         let feuerwehr = ids.len() == 1 && symbols::find(id).is_some_and(|s| s.cat == symbols::Category::Feuerwehr);
-        if d > if feuerwehr { 0.45 } else { 0.3 } {
+        // Treppenraum: Text legt das Zeichen eindeutig fest, die Zeichnung weicht oft stark ab
+        // ebenso bei Feuerwehrzeichen mit eindeutigem Legendentext (Ersteller zeichnen sie sehr verschieden)
+        let grenze = if ids.len() == 1 && (behaelt_text(id) || feuerwehr) { 0.65 } else { 0.3 };
+        if d > grenze {
             continue;
         }
         // Zeichen kommen gedreht vor (Richtungspfeile, Brandwand an waagerechter Wand …),
@@ -451,7 +540,7 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
         let mut bb = bild.clone();
         for k in 0..4 {
             let s = if k % 2 == 0 { seiten } else { 1.0 / seiten };
-            out.push(Muster { id, rot: k as f32 * 90.0, bild: bb.clone(), strafe: if k == 0 { 0.0 } else { strafe }, seiten: s, text: zeichen_text.clone() });
+            out.push(Muster { id, rot: k as f32 * 90.0, bild: bb.clone(), strafe: if k == 0 { 0.0 } else { strafe }, seiten: s, text: zeichen_text.clone(), ohne_text });
             bb = drehen(&bb);
         }
         let gegen = match id {
@@ -460,7 +549,7 @@ fn aus_legende_lernen(doc: &Doc) -> Vec<Muster> {
             _ => None,
         };
         if let Some(g) = gegen {
-            out.push(Muster { id: g, rot: 0.0, bild: spiegeln(&bild), strafe: 0.0, seiten, text: zeichen_text.clone() });
+            out.push(Muster { id: g, rot: 0.0, bild: spiegeln(&bild), strafe: 0.0, seiten, text: zeichen_text.clone(), ohne_text });
         }
     }
     out
@@ -590,15 +679,27 @@ pub fn normzeichen_einsetzen(doc: &mut Doc, ids: Option<&[u64]>) -> usize {
     let layer = doc.find_layer_by_name("Symbole");
     // von hinten, damit eingefügte Restteile die Positionen davor nicht verschieben
     funde.reverse();
-    for (i, f) in funde {
+    for (i, mut f) in funde {
+        if behaelt_text(f.id) {
+            if let ObjKind::Group { children } = &doc.objects[i].kind {
+                f.id = treppenraum_art(&children.iter().collect::<Vec<_>>());
+            }
+        }
         let rest = match (&mut doc.objects[i].kind, f.rest) {
             (ObjKind::Group { children }, Some(k)) => Some(children.remove(k)),
             _ => None,
         };
+        let texte = if behaelt_text(f.id) { texte_von(&doc.objects[i]) } else { Vec::new() };
         let o = &mut doc.objects[i];
         o.kind = ObjKind::Symbol { id: f.id.into(), pos: f.pos, size: (f.size * 10.0).round() / 10.0, rot: f.rot };
         o.style = Style::NONE;
         o.layer = layer;
+        // exemplarbezogene Texte (z. B. erreichbare Geschosse) bleiben über dem Zeichen
+        for mut t in texte.into_iter().rev() {
+            t.id = doc.alloc_id();
+            t.layer = layer;
+            doc.objects.insert(i + 1, t);
+        }
         if let Some(mut r) = rest {
             r.id = doc.alloc_id();
             doc.objects.insert(i, r);
@@ -650,7 +751,12 @@ fn lose_teile_ersetzen(doc: &mut Doc, ids: Option<&[u64]>, muster: &[Muster]) ->
             continue;
         }
         let innen = b.expand(0.3);
-        let teile: Vec<usize> = (0..lose.len()).filter(|&j| !belegt[j] && innen.contains(rahmen[j].min) && innen.contains(rahmen[j].max)).collect();
+        // Textrahmen sind nur geschätzt (Schriftbreite) – bei Text genügt die Mitte im Schild
+        let drin = |j: usize| {
+            let r = rahmen[j];
+            (innen.contains(r.min) && innen.contains(r.max)) || (matches!(probe.objects[lose[j]].kind, ObjKind::Text { .. }) && b.contains(r.center()))
+        };
+        let teile: Vec<usize> = (0..lose.len()).filter(|&j| !belegt[j] && drin(j)).collect();
         if teile.len() < 2 {
             continue;
         }
@@ -660,8 +766,13 @@ fn lose_teile_ersetzen(doc: &mut Doc, ids: Option<&[u64]>, muster: &[Muster]) ->
         if std::env::var("FLUCHTPLAN_LOSE").is_ok() && zuordnen(&probe, &g, muster).is_none() {
             eprintln!("LOSE @({:.0},{:.0}) {:.1} best={:?}", b.min.x, b.min.y, b.w(), vergleichen(&probe, &g, muster).map(|t| (t.0, t.1, t.2)));
         }
-        if let Some(f) = zuordnen(&probe, &g, muster) {
-            let mut ids: Vec<u64> = teile.iter().enumerate().filter(|(n, _)| Some(*n) != f.rest).map(|(_, &j)| herkunft[&probe.objects[lose[j]].id]).collect();
+        if let Some(mut f) = zuordnen(&probe, &g, muster) {
+            if behaelt_text(f.id) {
+                f.id = treppenraum_art(&teile.iter().map(|&j| &probe.objects[lose[j]]).collect::<Vec<_>>());
+            }
+            // exemplarbezogene Texte (Treppenraum-Geschosse) nicht mit entfernen
+            let bleibt = |j: usize| behaelt_text(f.id) && matches!(probe.objects[lose[j]].kind, ObjKind::Text { .. });
+            let mut ids: Vec<u64> = teile.iter().enumerate().filter(|(n, j)| Some(*n) != f.rest && !bleibt(**j)).map(|(_, &j)| herkunft[&probe.objects[lose[j]].id]).collect();
             ids.sort_unstable();
             ids.dedup();
             for &j in &teile {
@@ -939,21 +1050,58 @@ pub fn legende_ersetzen(doc: &mut Doc, ids: &[u64]) -> Option<BBox> {
     }
     // Einträge: eingesetztes Normzeichen + passender Text rechts daneben (Texte merken)
     let mut eintraege: Vec<(BBox, Vec<usize>)> = Vec::new();
+    // Beschriftung je Legendenschlüssel, wie sie im Plan steht
+    let mut beschriftung: Vec<(String, String, BBox)> = Vec::new();
     for o in doc.objects.iter().filter(|o| neu(o)) {
+        // Farbfeld einer Flächenvorlage (z. B. „horizontaler Rettungsweg“)
+        if let ObjKind::Area { preset, .. } = &o.kind {
+            let b = ops::bounds_doc(doc, &o.kind);
+            if b.w() > 25.0 || b.h() > 10.0 {
+                continue;
+            }
+            let h = b.h().max(4.0);
+            let neben: Vec<usize> = (0..texte.len())
+                .filter(|&i| {
+                    let t = texte[i].0;
+                    t.min.x >= b.max.x - 0.5 && t.min.x <= b.max.x + 3.0 * h && t.center().y >= b.min.y - 0.5 * h && t.center().y <= b.max.y + 0.5 * h
+                })
+                .collect();
+            let text: String = neben.iter().map(|&i| texte[i].1.as_str()).collect::<Vec<_>>().join(" ");
+            if !neben.is_empty() && crate::bauteile::flaeche_fuer_text(&text) == Some(preset.as_str()) {
+                beschriftung.push((format!("area:{preset}"), text, b));
+                eintraege.push((neben.iter().fold(b, |acc, &i| acc.union(texte[i].0)), neben));
+            }
+            continue;
+        }
         let ObjKind::Symbol { id: sym_id, .. } = &o.kind else { continue };
         let b = ops::bounds_doc(doc, &o.kind);
         let h = b.w().max(b.h());
-        let neben: Vec<usize> = (0..texte.len())
+        // Texte rechts daneben, deren Mitte auf Höhe des Zeichens liegt (kleine Zeichen: mind. 4 mm hoch gedacht)
+        let (y0, y1) = (b.center().y - (b.h() / 2.0).max(2.0) - 0.25, b.center().y + (b.h() / 2.0).max(2.0) + 0.25);
+        let mut neben: Vec<usize> = (0..texte.len())
             .filter(|&i| {
                 let t = texte[i].0;
-                t.min.x >= b.max.x - 0.5 && t.min.x <= b.max.x + 2.5 * h && t.center().y >= b.min.y - 0.25 * h && t.center().y <= b.max.y + 0.25 * h
+                t.min.x >= b.max.x - 0.5 && t.min.x <= b.max.x + 2.5 * h && t.center().y >= y0 && t.center().y <= y1
             })
             .collect();
+        // Folgezeilen direkt darunter (bündig, ohne Lücke) gehören zum Eintrag
+        loop {
+            let Some(unten) = neben.iter().map(|&i| texte[i].0).reduce(|a, b| if a.max.y > b.max.y { a } else { b }) else { break };
+            let weiter = (0..texte.len()).find(|&i| {
+                let t = texte[i].0;
+                !neben.contains(&i) && (t.min.x - unten.min.x).abs() < 1.0 && t.min.y >= unten.max.y - 0.5 * unten.h() && t.min.y <= unten.max.y + 0.6 * unten.h()
+            });
+            match weiter {
+                Some(i) => neben.push(i),
+                None => break,
+            }
+        }
         let text: String = neben.iter().map(|&i| texte[i].1.as_str()).collect::<Vec<_>>().join(" ");
         // der Text muss das Zeichen beschreiben (nicht nur irgendein Begriff daneben)
         if neben.is_empty() || begriff_norm(&text).chars().count() > 50 || !ids_fuer_text(&text).contains(&sym_id.as_str()) {
             continue;
         }
+        beschriftung.push((format!("sym:{sym_id}"), text.clone(), b));
         eintraege.push((neben.iter().fold(b, |acc, &i| acc.union(texte[i].0)), neben));
     }
     if eintraege.len() < 3 {
@@ -1071,6 +1219,9 @@ pub fn legende_ersetzen(doc: &mut Doc, ids: &[u64]) -> Option<BBox> {
     if let Some(r) = balken {
         bereich = bereich.union(r);
     }
+    // Beschriftungen nur von Einträgen innerhalb der Legende (nicht aus Verhaltensregeln o. Ä.)
+    let leg_bereich = bereich.expand(1.0);
+    beschriftung.retain(|(_, _, b)| leg_bereich.contains(b.center()));
     // alte Legende entfernen und echte Legende einsetzen
     let innen = bereich.expand(1.5);
     // Inhalt benachbarter Kästen, die in den Bereich ragen (Schriftfeld, Verhaltensregeln …), bleibt
@@ -1098,6 +1249,32 @@ pub fn legende_ersetzen(doc: &mut Doc, ids: &[u64]) -> Option<BBox> {
     let benutzt: Vec<String> = ops::used_legend_keys(doc).into_iter().map(|(k, _)| k).collect();
     doc.legend.entries.retain(|e| benutzt.contains(&e.key));
     ops::sync_legend(doc);
+    // Beschriftungen wie im Original übernehmen (erster Buchstabe groß, Zeilenumbruch-Trennungen zusammengeführt)
+    for (key, text, _) in &beschriftung {
+        // Silbentrennung am Zeilenende zusammenziehen („Wärmeabzugs- einrichtung“), Aufzählungen
+        // („Rauch- und …“) behalten
+        let woerter: Vec<&str> = text.split_whitespace().collect();
+        let mut t = String::new();
+        for (k, w) in woerter.iter().enumerate() {
+            let naechstes = woerter.get(k + 1).copied().unwrap_or("");
+            let trennung = w.ends_with('-') && naechstes.chars().next().is_some_and(|c| c.is_lowercase()) && !["und", "oder", "bzw."].contains(&naechstes);
+            if trennung {
+                t.push_str(w.trim_end_matches('-'));
+            } else {
+                t.push_str(w);
+                if k + 1 < woerter.len() {
+                    t.push(' ');
+                }
+            }
+        }
+        let mut c = t.chars();
+        let t = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        if let Some(e) = doc.legend.entries.iter_mut().find(|e| &e.key == key) {
+            if !t.is_empty() {
+                e.label = t;
+            }
+        }
+    }
     // die neue Legende darf benachbarte Kästen nicht überdecken: dort abschneiden, wo am meisten bleibt
     for n in &nachbarn {
         if !n.intersects(&bereich) {

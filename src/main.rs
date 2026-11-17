@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod bauteile;
 mod plattform;
 mod bso;
 mod canvas;

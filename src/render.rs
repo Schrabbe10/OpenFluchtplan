@@ -356,14 +356,44 @@ pub fn legend_prims(out: &mut Prims, doc: &Doc, a: Pos, b: Pos, cols: u32, size:
         let c = Pos::new(x + icon / 2.0, y + row_h / 2.0 - size * 0.2);
         legend_sample(out, doc, &e.key, c, icon);
         let tx = x + icon + size * 0.8;
-        let lines = 1 + langs;
-        let ty = c.y - (lines as f32 * size * 1.15) / 2.0;
-        text(out, Pos::new(tx, ty), e.label.clone(), size, farbe::SCHWARZ, TAlign::Links, false);
+        // zu lange Beschriftungen auf zwei Zeilen umbrechen, statt über den Rahmen zu laufen
+        let platz = (x + col_w - pad * 0.5 - tx).max(size * 4.0);
+        let (zeilen, f) = umbrechen(&e.label, size, platz);
+        let ts = size * f;
+        let lines = zeilen.len() + langs;
+        let zh = if zeilen.len() > 1 { ts * 1.05 } else { ts * 1.15 };
+        let ty = c.y - (lines as f32 * zh) / 2.0;
+        for (k, z) in zeilen.iter().enumerate() {
+            text(out, Pos::new(tx, ty + k as f32 * zh), z.clone(), ts, farbe::SCHWARZ, TAlign::Links, false);
+        }
         for (k, l) in doc.legend.langs.iter().enumerate() {
             if let Some(t) = i18n::translate(&e.key, *l) {
-                out.push(Prim::Text { pos: Pos::new(tx, ty + (k + 1) as f32 * size * 1.15), text: t.to_string(), size: size * 0.9, color: Color::rgb(0x44, 0x44, 0x44), align: TAlign::Links, bold: false, italic: true, rot: 0.0 });
+                out.push(Prim::Text { pos: Pos::new(tx, ty + (zeilen.len() + k) as f32 * zh), text: t.to_string(), size: size * 0.9, color: Color::rgb(0x44, 0x44, 0x44), align: TAlign::Links, bold: false, italic: true, rot: 0.0 });
             }
         }
+    }
+}
+
+/// Text in höchstens zwei Zeilen der Breite `breite` aufteilen (Umbruch an Leerzeichen); passt es dann
+/// noch nicht, liefert der Faktor (< 1) die nötige Verkleinerung der Schrift.
+fn umbrechen(s: &str, size: f32, breite: f32) -> (Vec<String>, f32) {
+    // die Schätzung (`text_width`) liegt bei Arial unter der echten Breite – mit Reserve rechnen
+    let breite = breite * 0.86;
+    let w = |t: &str| ops::text_width(t, size);
+    if w(s) <= breite {
+        return (vec![s.to_string()], 1.0);
+    }
+    let woerter: Vec<&str> = s.split_whitespace().collect();
+    let mut best: Option<(f32, usize)> = None;
+    for k in 1..woerter.len() {
+        let breiteste = w(&woerter[..k].join(" ")).max(w(&woerter[k..].join(" ")));
+        if best.is_none_or(|(bw, _)| breiteste < bw) {
+            best = Some((breiteste, k));
+        }
+    }
+    match best {
+        Some((bw, k)) => (vec![woerter[..k].join(" "), woerter[k..].join(" ")], (breite / bw).min(1.0)),
+        None => (vec![s.to_string()], (breite / w(s)).min(1.0)),
     }
 }
 

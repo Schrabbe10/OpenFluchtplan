@@ -216,12 +216,33 @@ pub fn teile_gruppieren(doc: &mut Doc, ids: &[u64], max_mm: f32, reihenfolge: bo
     // Liegt zwischen den Teilen ein fremdes Objekt, das sie überdeckt, würde die Gruppe die
     // Zeichenreihenfolge ändern – solche Teile bleiben einzeln.
     let boxes: Vec<BBox> = doc.objects.iter().map(|o| bounds_doc(doc, &o.kind)).collect();
+    // Schild mit ausgefülltem Hintergrund, der fast die ganze Gruppe abdeckt: gehört ohnehin nach oben –
+    // es sei denn, ein fremdes Teil liegt innerhalb des Schilds (es würde danach verdeckt)
+    let schild = |r: usize| -> Option<BBox> {
+        let b = cbox[r];
+        member
+            .iter()
+            .filter(|(_, m)| **m == r)
+            .filter(|(i, _)| {
+                let o = &doc.objects[**i];
+                let gefuellt = !matches!(o.style.fill, Fill::Keine) && matches!(o.kind, ObjKind::Polyline { closed: true, .. } | ObjKind::Path { closed: true, .. });
+                gefuellt && boxes[**i].w() * boxes[**i].h() >= 0.8 * b.w() * b.h()
+            })
+            .map(|(i, _)| boxes[*i])
+            .next()
+    };
+    let schilder: std::collections::HashMap<usize, BBox> = count.keys().copied().filter_map(|r| schild(r).map(|b| (r, b))).collect();
     for (&r, c) in count.iter_mut() {
         if *c < 2 || !reihenfolge {
             continue;
         }
         let b = cbox[r];
-        if (first[&r] + 1..last[&r]).any(|j| member.get(&j) != Some(&r) && boxes[j].intersects(&b)) {
+        let fremd = |j: &usize| member.get(j) != Some(&r) && boxes[*j].intersects(&b);
+        let stoert = match schilder.get(&r) {
+            Some(platte) => (first[&r] + 1..last[&r]).any(|j| fremd(&j) && platte.contains(boxes[j].center())),
+            None => (first[&r] + 1..last[&r]).any(|j| fremd(&j)),
+        };
+        if stoert {
             *c = 0;
         }
     }
