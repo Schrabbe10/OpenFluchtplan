@@ -91,11 +91,23 @@ pub fn style_prims(out: &mut Prims, pts: &[Pos], closed: bool, style: &Style) {
     }
 }
 
-fn chevrons(out: &mut Prims, pts: &[Pos], width: f32, color: Color) {
-    let h = (width * 0.32).max(0.8);
+/// Richtungspfeil in Normform (ISO 3864-3 / ISO 7010): rechtwinklige Spitze, Spitzenlänge = halbe
+/// Spitzenbreite, Schaftbreite = 0,4 × Spitzenbreite, Gesamtlänge = 1,2 × Spitzenbreite.
+/// `c` ist die Pfeilmitte, `kb` die Spitzenbreite.
+pub fn norm_pfeil(c: Pos, dir: Pos, kb: f32) -> Vec<Pos> {
+    let n = dir.perp();
+    let (len, kl, sb) = (kb * 1.2, kb * 0.5, kb * 0.4);
+    let tip = c + dir * (len / 2.0);
+    let basis = tip - dir * kl;
+    let ende = c - dir * (len / 2.0);
+    vec![ende + n * (sb / 2.0), basis + n * (sb / 2.0), basis + n * (kb / 2.0), tip, basis - n * (kb / 2.0), basis - n * (sb / 2.0), ende - n * (sb / 2.0)]
+}
+
+/// Richtungspfeile entlang eines Fluchtwegs.
+fn route_arrows(out: &mut Prims, pts: &[Pos], width: f32, color: Color) {
+    let kb = (width * 0.7).max(1.6);
     for (p, dir) in points_along(pts, width * 1.2, (width * 2.4).max(6.0)) {
-        let n = dir.perp();
-        out.push(Prim::Fill { pts: vec![p + dir * h, p - dir * h + n * h, p - dir * (h * 0.4), p - dir * h - n * h], color });
+        out.push(Prim::Fill { pts: norm_pfeil(p, dir, kb), color });
     }
 }
 
@@ -512,7 +524,7 @@ pub fn obj_prims<'a>(out: &mut Prims<'a>, doc: &'a Doc, o: &'a Obj, printing: bo
             out.push(Prim::Stroke { pts: p.clone(), stroke: PStroke { round: false, ..PStroke::solid(c, *width) }, closed: false });
             if *arrows {
                 let arrow_col = if c == farbe::FLUCHT_HELL { farbe::GRUEN } else { farbe::WEISS };
-                chevrons(out, &p, *width, arrow_col);
+                route_arrows(out, &p, *width, arrow_col);
             }
         }
         ObjKind::Symbol { id, pos, size, rot } => out.push(Prim::Symbol { id: id.clone(), c: *pos, size: *size, rot: *rot }),

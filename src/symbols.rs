@@ -160,8 +160,9 @@ fn bust(c: &str) -> String {
 fn door(c: &str) -> String {
     format!("<rect x='72' y='8' width='22' height='84' fill='none' stroke='{c}' stroke-width='5'/>")
 }
+/// Richtungspfeil in Normform (wie `render::norm_pfeil`): Spitzenbreite 70, Spitze 90°.
 fn arrow(c: &str) -> String {
-    format!("<polygon points='10,40 56,40 56,18 92,50 56,82 56,60 10,60' fill='{c}'/>")
+    format!("<polygon points='8,36 57,36 57,15 92,50 57,85 57,64 8,64' fill='{c}'/>")
 }
 fn diag_arrow(c: &str) -> String {
     format!("<g transform='rotate(-45 50 50)'>{}</g>", arrow(c))
@@ -604,7 +605,8 @@ fn build() -> Vec<SymbolDef> {
     add("FW_ANLEITER", Feuerwehr, "Anleiterstelle", fw_box(&format!("<path d='M20 20 L80 20' stroke='{R}' stroke-width='8'/><path d='M50 20 L50 30' stroke='{R}' stroke-width='6'/>"), R));
     add("FW_HAUPTZUGANG", Feuerwehr, "Hauptzugang Feuerwehr", format!("<polygon points='6,94 50,6 94,94' fill='{K}'/>"));
     add("FW_ZUGANG", Feuerwehr, "Gebäudezugang", format!("<polygon points='26,80 50,30 74,80' fill='{K}'/>"));
-    add("FW_ZUFAHRT", Feuerwehr, "Hauptzufahrt Feuerwehr", arrow(G));
+    // Feuerwehrzufahrt nach DIN 14034-6: eigene Pfeilform, nicht der ISO-Richtungspfeil
+    add("FW_ZUFAHRT", Feuerwehr, "Hauptzufahrt Feuerwehr", format!("<polygon points='10,40 56,40 56,18 92,50 56,82 56,60 10,60' fill='{G}'/>"));
     add("FW_NEBENZUFAHRT", Feuerwehr, "Nebenzufahrt Feuerwehr", format!("<polygon points='10,44 62,44 62,28 92,50 62,72 62,56 10,56' fill='{G}'/>"));
     add("FW_HOEHE", Feuerwehr, "Durchfahrtshöhe", format!("<circle cx='50' cy='50' r='46' fill='{W}' stroke='{R}' stroke-width='8'/><polygon points='50,12 40,26 60,26' fill='{K}'/><polygon points='50,88 40,74 60,74' fill='{K}'/>{}", label("3,5", K).replace("font-size='36'", "font-size='26'")));
     add("FW_GEWICHT", Feuerwehr, "Gewicht maximal", format!("<circle cx='50' cy='50' r='46' fill='{W}' stroke='{R}' stroke-width='8'/>{}", label("16t", K)));
